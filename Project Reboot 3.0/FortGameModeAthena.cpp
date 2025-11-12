@@ -784,7 +784,36 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 				bShouldSkipAircraft = CurrentPlaylist->Get<bool>(bSkipAircraftOffset);
 		}
 
-		float Duration = bShouldSkipAircraft ? 0 : 100000;
+		// Dynamic warmup countdown based on player count (with null checks)
+		float Duration;
+		if (bShouldSkipAircraft) {
+			Duration = 0;
+		} else {
+			auto World = GetWorld();
+			if (!World || !World->GetNetDriver()) {
+				LOG_WARN(LogDev, "World or NetDriver is null during initial setup, using default duration");
+				Duration = 100000; // Default to long wait if we can't get player count
+			} else {
+				int playerCount = World->GetNetDriver()->GetClientConnections().Num();
+				
+				if (playerCount <= 1) {
+					Duration = 100000; // 0-1 players: 100,000 seconds
+				} else if (playerCount <= 9) {
+					Duration = 300; // 2-9 players: 5 minutes
+				} else if (playerCount <= 24) {
+					Duration = 180; // 10-24 players: 3 minutes
+				} else if (playerCount <= 49) {
+					Duration = 120; // 25-49 players: 2 minutes
+				} else if (playerCount <= 74) {
+					Duration = 60; // 50-74 players: 1 minute
+				} else if (playerCount <= 99) {
+					Duration = 30; // 75-99 players: 30 seconds
+				} else {
+					Duration = 15; // 100+ players: 15 seconds
+				}
+				LOG_INFO(LogDev, "Initial timer setup: {} players connected, duration: {} seconds", playerCount, Duration);
+			}
+		}
 		float EarlyDuration = Duration;
 
 		float TimeSeconds = GameState->GetServerWorldTimeSeconds(); // UGameplayStatics::GetTimeSeconds(GetWorld());
@@ -1253,6 +1282,74 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 	auto CurrentPlaylist = CurrentPlaylistDataOffset == -1 && Fortnite_Version < 6 ? nullptr : GameState->GetCurrentPlaylist();
 
 	LOG_INFO(LogPlayer, "HandleStartingNewPlayer!");
+
+	// Update warmup timer based on new player count (with null checks)
+	auto World = GetWorld();
+	if (!World || !World->GetNetDriver()) {
+		LOG_WARN(LogPlayer, "World or NetDriver is null, skipping timer update");
+	} else {
+		int playerCount = World->GetNetDriver()->GetClientConnections().Num();
+		
+		// Determine gamemode-specific minimum player requirements
+		int minimumPlayers = 2; // Default for Solo
+		std::string gamemodeName = "Solo";
+		
+		if (PlaylistName.find("50v50") != std::string::npos) {
+			minimumPlayers = 10; // Minimum for 50v50 (5v5)
+			gamemodeName = "50v50";
+		} else if (PlaylistName.find("Duo") != std::string::npos) {
+			minimumPlayers = 4; // Minimum for Duos (2v2)
+			gamemodeName = "Duos";
+		} else if (PlaylistName.find("Squad") != std::string::npos) {
+			minimumPlayers = 8; // Minimum for Squads (2v2v2v2)
+			gamemodeName = "Squads";
+		}
+		
+		LOG_INFO(LogPlayer, "Current gamemode: {} (minimum players: {})", gamemodeName, minimumPlayers);
+		
+		float NewDuration;
+		
+		if (playerCount < minimumPlayers) {
+			NewDuration = 100000; // Wait for minimum players: 100,000 seconds
+			LOG_INFO(LogPlayer, "Below minimum players ({}/{}), setting extended wait timer", playerCount, minimumPlayers);
+		} else if (playerCount >= minimumPlayers && playerCount <= 9) {
+			NewDuration = 300; // Minimum met, 5 minutes to allow more players
+			LOG_INFO(LogPlayer, "Minimum players met, 5 minute timer for additional players");
+		} else if (playerCount <= 24) {
+			NewDuration = 180; // 10-24 players: 3 minutes
+		} else if (playerCount <= 49) {
+			NewDuration = 120; // 25-49 players: 2 minutes
+		} else if (playerCount <= 74) {
+			NewDuration = 60; // 50-74 players: 1 minute
+		} else if (playerCount <= 99) {
+			NewDuration = 30; // 75-99 players: 30 seconds
+		} else {
+			NewDuration = 15; // 100+ players: 15 seconds
+		}
+		
+		// Update the warmup countdown with new duration (with null checks)
+		if (GameState && GameMode) {
+			float TimeSeconds = GameState->GetServerWorldTimeSeconds();
+			static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
+			static auto WarmupCountdownStartTimeOffset = GameState->GetOffset("WarmupCountdownStartTime");
+			static auto WarmupCountdownDurationOffset = GameMode->GetOffset("WarmupCountdownDuration");
+			static auto WarmupEarlyCountdownDurationOffset = GameMode->GetOffset("WarmupEarlyCountdownDuration");
+			
+			if (WarmupCountdownEndTimeOffset != -1 && WarmupCountdownStartTimeOffset != -1 && 
+				WarmupCountdownDurationOffset != -1 && WarmupEarlyCountdownDurationOffset != -1) {
+				GameState->Get<float>(WarmupCountdownEndTimeOffset) = TimeSeconds + NewDuration;
+				GameMode->Get<float>(WarmupCountdownDurationOffset) = NewDuration;
+				GameState->Get<float>(WarmupCountdownStartTimeOffset) = TimeSeconds;
+				GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = NewDuration;
+				
+				LOG_INFO(LogPlayer, "Updated warmup timer: {} players connected, new duration: {} seconds", playerCount, NewDuration);
+			} else {
+				LOG_WARN(LogPlayer, "Failed to get warmup countdown offsets");
+			}
+		} else {
+			LOG_WARN(LogPlayer, "GameState or GameMode is null, skipping timer update");
+		}
+	}
 
 	if (Globals::bAutoRestart)
 	{

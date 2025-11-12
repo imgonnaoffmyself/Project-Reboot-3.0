@@ -176,7 +176,28 @@ void __fastcall ApplyHomebaseEffectsOnPlayerSetupHook(
             auto CurrentHeroType = (UFortItemDefinition*)AllHeroTypes.at(i);
 
             if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
+            {
+                auto HeroPath = CurrentHeroType->GetPathName();
+                
+                // Exclude broken female heroes
+                if (Fortnite_Version == 1.72)
+                {
+                    // In 1.7.2, only exclude Ramirez (HID_001_Athena_Commando_F)
+                    if (HeroPath.contains("HID_001_Athena_Commando_F"))
+                        continue;
+                }
+                else if (Fortnite_Version == 1.8)
+                {
+                    // In 1.8, exclude all female heroes (HID_001-004_Athena_Commando_F)
+                    if (HeroPath.contains("HID_001_Athena_Commando_F") ||
+                        HeroPath.contains("HID_002_Athena_Commando_F") ||
+                        HeroPath.contains("HID_003_Athena_Commando_F") ||
+                        HeroPath.contains("HID_004_Athena_Commando_F"))
+                        continue;
+                }
+                
                 AthenaHeroTypes.push_back(CurrentHeroType);
+            }
         }
 
         if (AthenaHeroTypes.size() > 0)

@@ -48,6 +48,11 @@
 #include "KismetRenderingLibrary.h"
 
 #define GAME_TAB 1
+
+// Hotkey IDs for global hotkeys
+#define HOTKEY_SKIP_SHRINK 1001
+#define HOTKEY_START_BUS 1002
+#define HOTKEY_RESTART 1003
 #define PLAYERS_TAB 2
 #define GAMEMODE_TAB 3
 #define THANOS_TAB 4
@@ -87,7 +92,7 @@ extern inline bool bDebugPrintFloorLoot = false;
 extern inline bool bDebugPrintSwapping = false;
 extern inline bool bEnableBotTick = false;
 extern inline bool bZoneReversing = false;
-extern inline bool bEnableCombinePickup = false;
+extern inline bool bEnableCombinePickup = true;
 extern inline int AmountOfBotsToSpawn = 0;
 extern inline int WarmupRequiredPlayerCount = 1;
 extern inline bool bEnableRebooting = false;
@@ -119,43 +124,216 @@ static inline bool HasAnyCalendarModification()
 	return Calendar::HasSnowModification() || Calendar::HasNYE() || Fortnite_Version == 8.40 || std::floor(Fortnite_Version) == 13;
 }
 
+// Global hotkey management
+static bool bHotkeysRegistered = false;
+
+static inline void RegisterGlobalHotkeys(HWND hwnd)
+{
+	if (bHotkeysRegistered) return;
+	
+	LOG_INFO(LogDev, "Registering global hotkeys...");
+	
+	// Register Insert key for Skip Shrink Safe Zone
+	if (RegisterHotKey(hwnd, HOTKEY_SKIP_SHRINK, 0, VK_INSERT)) {
+		LOG_INFO(LogDev, "Registered Insert key for Skip Shrink Safe Zone");
+	} else {
+		LOG_WARN(LogDev, "Failed to register Insert key hotkey");
+	}
+	
+	// Register Delete key for Start Bus Countdown
+	if (RegisterHotKey(hwnd, HOTKEY_START_BUS, 0, VK_DELETE)) {
+		LOG_INFO(LogDev, "Registered Delete key for Start Bus Countdown");
+	} else {
+		LOG_WARN(LogDev, "Failed to register Delete key hotkey");
+	}
+	
+	// Register End key for Restart
+	if (RegisterHotKey(hwnd, HOTKEY_RESTART, 0, VK_END)) {
+		LOG_INFO(LogDev, "Registered End key for Restart");
+	} else {
+		LOG_WARN(LogDev, "Failed to register End key hotkey");
+	}
+	
+	bHotkeysRegistered = true;
+	LOG_INFO(LogDev, "Global hotkeys registration completed");
+}
+
+static inline void UnregisterGlobalHotkeys(HWND hwnd)
+{
+	if (!bHotkeysRegistered) return;
+	
+	LOG_INFO(LogDev, "Unregistering global hotkeys...");
+	
+	UnregisterHotKey(hwnd, HOTKEY_SKIP_SHRINK);
+	UnregisterHotKey(hwnd, HOTKEY_START_BUS);
+	UnregisterHotKey(hwnd, HOTKEY_RESTART);
+	
+	bHotkeysRegistered = false;
+	LOG_INFO(LogDev, "Global hotkeys unregistered");
+}
+
+// Forward declaration
+static inline void Restart();
+
+static inline void HandleGlobalHotkey(WPARAM wParam)
+{
+	if (!Globals::bStartedListening) {
+		LOG_INFO(LogDev, "Hotkey pressed but server not active, ignoring");
+		return;
+	}
+	
+	switch (wParam) {
+		case HOTKEY_SKIP_SHRINK:
+			LOG_INFO(LogDev, "Insert key pressed - Skip Shrink Safe Zone");
+			// Use existing GUI button logic
+			if (auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode())) {
+				auto SafeZoneIndicator = GameMode->GetSafeZoneIndicator();
+				if (SafeZoneIndicator) {
+					SafeZoneIndicator->SkipShrinkSafeZone();
+					LOG_INFO(LogDev, "Safe zone shrink skipped via hotkey");
+				} else {
+					LOG_WARN(LogDev, "Could not get SafeZoneIndicator");
+				}
+			} else {
+				LOG_WARN(LogDev, "Could not get GameMode for safe zone skip");
+			}
+			break;
+			
+		case HOTKEY_START_BUS:
+			LOG_INFO(LogDev, "Delete key pressed - Start Bus Countdown");
+			// Use existing GUI button logic
+			if (!bStartedBus) {
+				bStartedBus = true;
+				auto GameMode = (AFortGameMode*)GetWorld()->GetGameMode();
+				auto GameState = Cast<AFortGameStateAthena>(GameMode->GetGameState());
+				
+				if (GameState && GameMode) {
+					AmountOfPlayersWhenBusStart = GameState->GetPlayersLeft();
+					
+					static auto WarmupCountdownEndTimeOffset = GameState->GetOffset("WarmupCountdownEndTime");
+					float TimeSeconds = GameState->GetServerWorldTimeSeconds();
+					float Duration = 10;
+					
+					static auto WarmupCountdownStartTimeOffset = GameState->GetOffset("WarmupCountdownStartTime");
+					static auto WarmupCountdownDurationOffset = GameMode->GetOffset("WarmupCountdownDuration");
+					static auto WarmupEarlyCountdownDurationOffset = GameMode->GetOffset("WarmupEarlyCountdownDuration");
+					
+					GameState->Get<float>(WarmupCountdownEndTimeOffset) = TimeSeconds + Duration;
+					GameMode->Get<float>(WarmupCountdownDurationOffset) = Duration;
+					GameState->Get<float>(WarmupCountdownStartTimeOffset) = TimeSeconds;
+					GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = Duration;
+					
+					LOG_INFO(LogDev, "Bus countdown started via hotkey (10 second countdown)");
+				} else {
+					LOG_WARN(LogDev, "Could not get GameMode/GameState for bus start");
+				}
+			} else {
+				LOG_INFO(LogDev, "Bus already started, ignoring hotkey");
+			}
+			break;
+			
+		case HOTKEY_RESTART:
+			LOG_INFO(LogDev, "End key pressed - Restart Server");
+			Restart();
+			break;
+			
+		default:
+			LOG_WARN(LogDev, "Unknown hotkey ID: {}", wParam);
+			break;
+	}
+}
+
 static inline void Restart() // todo move?
 {
-	InitBotNames();
+	LOG_INFO(LogDev, "=== RESTART FUNCTION CALLED ===");
+	
+	try {
+		LOG_INFO(LogDev, "Step 1: Initializing bot names");
+		InitBotNames();
 
-	FString LevelA = Engine_Version < 424
-		? L"open Athena_Terrain" : Engine_Version >= 500 ? Fortnite_Version >= 23
-		? L"open Asteria_Terrain"
-		: Globals::bCreative ? L"open Creative_NoApollo_Terrain"
-		: L"open Artemis_Terrain"
-		: Globals::bCreative ? L"open Creative_NoApollo_Terrain"
-		: L"open Apollo_Terrain";
+		LOG_INFO(LogDev, "Step 2: Determining level string");
+		FString LevelA = Engine_Version < 424
+			? L"open Athena_Terrain" : Engine_Version >= 500 ? Fortnite_Version >= 23
+			? L"open Asteria_Terrain"
+			: Globals::bCreative ? L"open Creative_NoApollo_Terrain"
+			: L"open Artemis_Terrain"
+			: Globals::bCreative ? L"open Creative_NoApollo_Terrain"
+			: L"open Apollo_Terrain";
+		
+		LOG_INFO(LogDev, "Selected level: {}", LevelA.ToString());
 
-	static auto BeaconClass = FindObject<UClass>(L"/Script/FortniteGame.FortOnlineBeaconHost");
-	auto AllFortBeacons = UGameplayStatics::GetAllActorsOfClass(GetWorld(), BeaconClass);
+		LOG_INFO(LogDev, "Step 3: Getting world instance");
+		auto World = GetWorld();
+		if (!World) {
+			LOG_ERROR(LogDev, "CRITICAL: GetWorld() returned null! Cannot proceed with restart");
+			return;
+		}
+		LOG_INFO(LogDev, "World instance valid: {}", (void*)World);
 
-	for (int i = 0; i < AllFortBeacons.Num(); ++i)
-	{
-		AllFortBeacons.at(i)->K2_DestroyActor();
+		LOG_INFO(LogDev, "Step 4: Finding beacon class");
+		static auto BeaconClass = FindObject<UClass>(L"/Script/FortniteGame.FortOnlineBeaconHost");
+		if (!BeaconClass) {
+			LOG_WARN(LogDev, "BeaconClass not found, skipping beacon cleanup");
+		} else {
+			LOG_INFO(LogDev, "BeaconClass found: {}", (void*)BeaconClass);
+			
+			LOG_INFO(LogDev, "Step 5: Getting all beacon actors");
+			auto AllFortBeacons = UGameplayStatics::GetAllActorsOfClass(World, BeaconClass);
+			LOG_INFO(LogDev, "Found {} beacon actors to destroy", AllFortBeacons.Num());
+
+			LOG_INFO(LogDev, "Step 6: Destroying beacon actors");
+			for (int i = 0; i < AllFortBeacons.Num(); ++i)
+			{
+				auto Beacon = AllFortBeacons.at(i);
+				if (Beacon) {
+					LOG_INFO(LogDev, "Destroying beacon {}: {}", i, (void*)Beacon);
+					Beacon->K2_DestroyActor();
+				} else {
+					LOG_WARN(LogDev, "Beacon {} is null, skipping", i);
+				}
+			}
+
+			AllFortBeacons.Free();
+			LOG_INFO(LogDev, "Beacon cleanup completed");
+		}
+
+		LOG_INFO(LogDev, "Step 7: Resetting global flags");
+		Globals::bInitializedPlaylist = false;
+		Globals::bStartedListening = false;
+		Globals::bHitReadyToStartMatch = false;
+		bStartedBus = false;
+		AmountOfRestarts++;
+		LOG_INFO(LogDev, "Global flags reset, restart count: {}", AmountOfRestarts);
+
+		LOG_INFO(LogDev, "Step 8: Initiating level switch");
+		LOG_INFO(LogDev, "Fortnite_Version: {}, using method: {}", Fortnite_Version, 
+			Fortnite_Version >= 3 ? "RestartGame()" : "ExecuteConsoleCommand()");
+
+		if (Fortnite_Version >= 3) // idk what ver
+		{
+			auto GameMode = World->GetGameMode();
+			if (!GameMode) {
+				LOG_ERROR(LogDev, "CRITICAL: GameMode is null! Cannot call RestartGame()");
+				LOG_INFO(LogDev, "Falling back to console command method");
+				UKismetSystemLibrary::ExecuteConsoleCommand(World, LevelA, nullptr);
+			} else {
+				LOG_INFO(LogDev, "GameMode valid: {}, calling RestartGame()", (void*)GameMode);
+				((AGameMode*)GameMode)->RestartGame();
+				LOG_INFO(LogDev, "RestartGame() called successfully");
+			}
+		}
+		else
+		{
+			LOG_INFO(LogDev, "Using console command method");
+			UKismetSystemLibrary::ExecuteConsoleCommand(World, LevelA, nullptr);
+			LOG_INFO(LogDev, "Console command executed successfully");
+		}
+		
+		LOG_INFO(LogDev, "=== RESTART FUNCTION COMPLETED SUCCESSFULLY ===");
 	}
-
-	AllFortBeacons.Free();
-
-	Globals::bInitializedPlaylist = false;
-	Globals::bStartedListening = false;
-	Globals::bHitReadyToStartMatch = false;
-	bStartedBus = false;
-	AmountOfRestarts++;
-
-	LOG_INFO(LogDev, "Switching!");
-
-	if (Fortnite_Version >= 3) // idk what ver
-	{
-		((AGameMode*)GetWorld()->GetGameMode())->RestartGame();
-	}
-	else
-	{
-		UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), LevelA, nullptr);
+	catch (...) {
+		LOG_ERROR(LogDev, "EXCEPTION CAUGHT IN RESTART FUNCTION!");
+		LOG_ERROR(LogDev, "This indicates a serious crash occurred during restart");
 	}
 
 	/*
@@ -330,6 +508,7 @@ static inline void StaticUI()
 
 	ImGui::InputInt("Shield/Health for siphon", &AmountOfHealthSiphon);
 
+	#ifdef INTERNAL_BUILD
 	ImGui::Checkbox("Enable Developer Mode", &Globals::bDeveloperMode);
 
 	if (Globals::bDeveloperMode)
@@ -342,6 +521,7 @@ static inline void StaticUI()
 			Hooking::MinHook::Hook((PVOID)Addresses::ProcessEvent, ProcessEventHook, (PVOID*)&UObject::ProcessEventOriginal);
 		}
 	}
+	#endif
 
 	// ImGui::InputInt("Amount of bots to spawn", &AmountOfBotsToSpawn);
 
@@ -350,7 +530,9 @@ static inline void StaticUI()
 	
 	ImGui::Checkbox("Private IPs are operator", &Globals::bPrivateIPsAreOperator);
 
-	ImGui::Checkbox("No MCP (Don't change unless you know what this is)", &Globals::bNoMCP);
+	#ifdef INTERNAL_BUILD
+		ImGui::Checkbox("No Cosmetic Mode", &Globals::bNoMCP);
+	#endif
 
 	if (Addresses::ApplyGadgetData && Addresses::RemoveGadgetData && Engine_Version < 424)
 	{
@@ -724,12 +906,50 @@ static inline void MainUI()
 
 				if (!bStartedBus)
 				{
-					bool bWillBeLategame = Globals::bLateGame.load();
-					ImGui::Checkbox("Lategame", &bWillBeLategame);
-					SetIsLategame(bWillBeLategame);
+					// Set lategame to false by default (no UI control)
+					SetIsLategame(false);
 				}
 
 				ImGui::Text(std::format("Joinable {}", Globals::bStartedListening).c_str());
+
+				// Playlist dropdown - always visible
+				if (!Globals::bCreative)
+				{
+					// Refresh playlist options based on current Fortnite version
+					static std::vector<PlaylistOption> currentOptions = GetPlaylistOptions();
+					if (currentOptions.size() != PlaylistOptions.size()) {
+						PlaylistOptions = GetPlaylistOptions();
+						currentOptions = PlaylistOptions;
+						// Reset selection if it's out of bounds
+						if (SelectedPlaylistIndex >= PlaylistOptions.size()) {
+							SelectedPlaylistIndex = 0;
+						}
+					}
+					
+					int previousSelection = SelectedPlaylistIndex;
+					if (ImGui::BeginCombo("Playlist", PlaylistOptions[SelectedPlaylistIndex].displayName.c_str()))
+					{
+						for (int i = 0; i < PlaylistOptions.size(); i++)
+						{
+							bool isSelected = (SelectedPlaylistIndex == i);
+							if (ImGui::Selectable(PlaylistOptions[i].displayName.c_str(), isSelected))
+							{
+								SelectedPlaylistIndex = i;
+								PlaylistName = PlaylistOptions[i].path;
+								
+								// If server is active and playlist changed, restart the match
+								if (Globals::bStartedListening && previousSelection != i)
+								{
+									LOG_INFO(LogGame, "Playlist changed during active server, restarting match...");
+									Restart();
+								}
+							}
+							if (isSelected)
+								ImGui::SetItemDefaultFocus();
+						}
+						ImGui::EndCombo();
+					}
+				}
 
 				if (!Globals::bStartedListening) // hm
 				{
@@ -1309,7 +1529,9 @@ static inline void MainUI()
 			ImGui::Checkbox("Fill Vending Machines", &Globals::bFillVendingMachines);
 			ImGui::Checkbox("Enable Bot Tick", &bEnableBotTick);
 			ImGui::Checkbox("Enable Rebooting", &bEnableRebooting);
+			#ifdef INTERNAL_BUILD
 			ImGui::Checkbox("Enable Combine Pickup", &bEnableCombinePickup);
+			#endif
 			ImGui::Checkbox("Exclude unhandled", &bExcludeUnhandled);
 			ImGui::InputInt("Amount To Subtract Index", &AmountToSubtractIndex);
 			ImGui::InputText("Class Name to mess with", &ClassNameToDump);
@@ -1505,9 +1727,8 @@ static inline void PregameUI()
 
 	if (Addresses::SetZoneToIndex)
 	{
-		bool bWillBeLategame = Globals::bLateGame.load();
-		ImGui::Checkbox("Lategame", &bWillBeLategame);
-		SetIsLategame(bWillBeLategame);
+		// Set lategame to false by default (no UI control)
+		SetIsLategame(false);
 	}
 
 	if (HasEvent())
@@ -1530,7 +1751,35 @@ static inline void PregameUI()
 	ImGui::SliderInt("Players required to start the match", &WarmupRequiredPlayerCount, 1, 100);
 		
 	if (!Globals::bCreative)
-		ImGui::InputText("Playlist", &PlaylistName);
+	{
+		// Refresh playlist options based on current Fortnite version
+		static std::vector<PlaylistOption> currentOptions = GetPlaylistOptions();
+		if (currentOptions.size() != PlaylistOptions.size()) {
+			PlaylistOptions = GetPlaylistOptions();
+			currentOptions = PlaylistOptions;
+			// Reset selection if it's out of bounds
+			if (SelectedPlaylistIndex >= PlaylistOptions.size()) {
+				SelectedPlaylistIndex = 0;
+			}
+		}
+		
+		// Playlist dropdown menu
+		if (ImGui::BeginCombo("Playlist", PlaylistOptions[SelectedPlaylistIndex].displayName.c_str()))
+		{
+			for (int i = 0; i < PlaylistOptions.size(); i++)
+			{
+				bool isSelected = (SelectedPlaylistIndex == i);
+				if (ImGui::Selectable(PlaylistOptions[i].displayName.c_str(), isSelected))
+				{
+					SelectedPlaylistIndex = i;
+					PlaylistName = PlaylistOptions[i].path;
+				}
+				if (isSelected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+	}
 }
 
 static inline HICON LoadIconFromMemory(const char* bytes, int bytes_size, const wchar_t* IconName) {
@@ -1565,8 +1814,11 @@ static inline DWORD WINAPI GuiThread(LPVOID)
 	WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"RebootClass", NULL };
 	::RegisterClassEx(&wc);
 
-	HWND hwnd = ::CreateWindowExW(0L,wc.lpszClassName,(L"Project Reboot " + ([](double v) { std::wstringstream ss; ss << std::fixed << std::setprecision(2) << v; return ss.str(); })(Fortnite_Version)).c_str(),(WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX), 100, 100, Width, Height, NULL, NULL, wc.hInstance, NULL);
-
+#ifdef INTERNAL_BUILD
+	HWND hwnd = ::CreateWindowExW(0L,wc.lpszClassName,(L"Fortnite Server (FOR INTERNAL USE ONLY)"),(WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX), 100, 100, Width, Height, NULL, NULL, wc.hInstance, NULL);
+#else
+	HWND hwnd = ::CreateWindowExW(0L, wc.lpszClassName, (L"Fortnite Server"), (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX), 100, 100, Width, Height, NULL, NULL, wc.hInstance, NULL);
+#endif
 
 	if (hwnd == NULL)
 	{
@@ -1597,6 +1849,9 @@ static inline DWORD WINAPI GuiThread(LPVOID)
 	// Show the window
 	::ShowWindow(hwnd, SW_SHOWDEFAULT);
 	::UpdateWindow(hwnd);
+	
+	// Register global hotkeys
+	RegisterGlobalHotkeys(hwnd);
 
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
@@ -1800,7 +2055,11 @@ static inline LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
 		if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
 			return 0;
 		break;
+	case WM_HOTKEY:
+		HandleGlobalHotkey(wParam);
+		return 0;
 	case WM_DESTROY:
+		UnregisterGlobalHotkeys(hWnd);
 		::PostQuitMessage(0);
 		return 0;
 	}

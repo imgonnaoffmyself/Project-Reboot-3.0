@@ -278,12 +278,12 @@ void AFortPlayerControllerAthena::EnterAircraftHook(UObject* PC, AActor* Aircraf
 
 	if (Fortnite_Version < 2.5) // idk
 	{
-		/* auto PickaxeInstance = WorldInventory->GetPickaxeInstance();
+		auto PickaxeInstance = WorldInventory->GetPickaxeInstance();
 
 		if (!PickaxeInstance)
 			return;
 				
-		AFortPlayerController::ServerExecuteInventoryItemHook(PlayerController, PickaxeInstance->GetItemEntry()->GetItemGuid()); */
+		AFortPlayerController::ServerExecuteInventoryItemHook(PlayerController, PickaxeInstance->GetItemEntry()->GetItemGuid());
 	}
 }
 

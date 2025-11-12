@@ -82,7 +82,7 @@ static inline std::vector<Event> Events =
 		5.30,
 		false
 	),
-	/* Event
+	Event
 	(
 		"Impact Lake",
 		"/Game/Athena/Prototype/Blueprints/Cube/CUBE.CUBE_C",
@@ -106,7 +106,7 @@ static inline std::vector<Event> Events =
 		"/Game/Athena/Playlists/Playlist_DefaultSolo.Playlist_DefaultSolo",
 		5.41,
 		false
-	), */
+	),
 	Event
 	(
 		"Butterfly",
