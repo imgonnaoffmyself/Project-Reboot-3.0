@@ -1080,6 +1080,14 @@ DWORD WINAPI Main(LPVOID)
 
     Hooking::MinHook::Hook((PVOID)Addresses::KickPlayer, (PVOID)AGameSession::KickPlayerHook, (PVOID*)&AGameSession::KickPlayerOriginal);
 
+	static auto WelcomeMessageFn = FindObject<UFunction>(L"/Script/Engine.GameViewportClient.NotifyPlayerLogin"); // Not correct name but same sig
+
+	// Using NotifyPlayerLogin because HandleWelcomeMessage is not a UFUNCTION
+	if (WelcomeMessageFn)
+	{
+		Hooking::MinHook::Hook(GetGameViewportClient(), WelcomeMessageFn, AFortGameModeAthena::WelcomeMessageHook, nullptr, false, true);
+	}
+
     LOG_INFO(LogDev, "Size: 0x{:x}", sizeof(TMap<FName, void*>));
 
     Hooking::MinHook::Hook((PVOID)Addresses::ActorGetNetMode, (PVOID)GetNetModeHook2, nullptr);

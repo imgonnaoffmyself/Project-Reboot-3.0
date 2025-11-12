@@ -285,7 +285,9 @@ public:
 	static void HandleSpawnRateForActorClass(UClass* ActorClass, float SpawnPercentage); // idk where to put
 
 	static void OnAircraftEnteredDropZoneHook(AFortGameModeAthena* GameModeAthena, AActor* Aircraft);
-	static bool Athena_ReadyToStartMatchHook(AFortGameModeAthena* GameMode);
+	static void WelcomeMessageHook(UGameViewportClient* ViewportClient, UNetConnection* Connection, FString WelcomeMessage);
+
+	static void Athena_ReadyToStartMatchHook(AFortGameModeAthena* GameMode);
 	static int Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint8 preferredTeam, AActor* Controller);
 	static void Athena_HandleStartingNewPlayerHook(AFortGameModeAthena* GameMode, AActor* NewPlayerActor);
 	static void SetZoneToIndexHook(AFortGameModeAthena* GameModeAthena, int OverridePhaseMaybeIDFK);
