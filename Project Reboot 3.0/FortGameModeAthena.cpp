@@ -1271,26 +1271,6 @@ int AFortGameModeAthena::Athena_PickTeamHook(AFortGameModeAthena* GameMode, uint
 	return NextTeamIndex;
 }
 
-void AFortGameModeAthena::WelcomeMessageHook(UGameViewportClient* ViewportClient, UNetConnection* Connection, FString WelcomeMessage)
-{
-	auto PlayerController = Connection->GetPlayerController();
-	auto PlayerState = PlayerController->GetPlayerState();
-
-	if (!PlayerState)
-		return;
-
-	auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
-
-	uint8 TeamIndex = GameMode->PickTeam(PlayerController);
-
-	PlayerState->GetTeamIndex() = TeamIndex;
-
-	static auto OnRep_TeamIndexFn = FindObject<UFunction>(L"/Script/Engine.PlayerState.OnRep_TeamIndex");
-	PlayerState->ProcessEvent(OnRep_TeamIndexFn);
-
-	LOG_INFO(LogDev, "WelcomeMessageHook: Set {}'s team to {}", PlayerState->GetPlayerName().ToString(), TeamIndex);
-}
-
 void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena* GameMode, AActor* NewPlayerActor)
 {
 	if (NewPlayerActor == GetLocalPlayerController()) // we dont really need this but it also functions as a nullptr check usually
@@ -1688,7 +1668,24 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 	if (auto MatchReportPtr = NewPlayer->GetMatchReport())
 		*MatchReportPtr = (UAthenaPlayerMatchReport*)UGameplayStatics::SpawnObject(UAthenaPlayerMatchReport::StaticClass(), NewPlayer); // idk when to do this
 
-	LOG_INFO(LogDev, "New player {} going on TeamIndex {}", PlayerStateAthena->GetPlayerName().ToString(), PlayerStateAthena->GetTeamIndex());
+	static auto SquadIdOffset = PlayerStateAthena->GetOffset("SquadId", false);
+
+	if (SquadIdOffset != -1)
+		PlayerStateAthena->GetSquadId() = PlayerStateAthena->GetTeamIndex() - NumToSubtractFromSquadId; // wrong place to do this
+
+	TWeakObjectPtr<AFortPlayerStateAthena> WeakPlayerState{};
+	WeakPlayerState.ObjectIndex = PlayerStateAthena->InternalIndex;
+	WeakPlayerState.ObjectSerialNumber = GetItemByIndex(PlayerStateAthena->InternalIndex)->SerialNumber;
+
+	if (auto TeamsArrayContainer = GameState->GetTeamsArrayContainer())
+	{
+		auto& SquadArray = TeamsArrayContainer->SquadsArray.at(PlayerStateAthena->GetSquadId());
+		SquadArray.Add(WeakPlayerState);
+	}
+
+	GameState->AddPlayerStateToGameMemberInfo(PlayerStateAthena);
+
+	LOG_INFO(LogDev, "New player going on TeamIndex {} with SquadId {}", PlayerStateAthena->GetTeamIndex(), SquadIdOffset != -1 ? PlayerStateAthena->GetSquadId() : -1);
 
 #if 0
 	if (Fortnite_Version < 14) // Fixes LS not dropping // Probably not needed on any build
