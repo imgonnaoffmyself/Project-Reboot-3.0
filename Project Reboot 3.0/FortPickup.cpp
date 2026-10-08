@@ -386,7 +386,10 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 	auto PawnLoc = Pawn->GetActorLocation();
 	bool bIsIncomingPrimary = IsPrimaryQuickbar(PickupItemDefinition);
 
-	// Determine if incoming is ammo/resource (should never be limited by quickbar slots)
+	// Secondary (traps, building, ammo, resource, melee, edit) are not limited by quickbar slots in original 1.7.2,
+	// so they should never be considered inventory full – this restores trap pickup which was broken when we counted secondary.
+	// Only primary (weapons/consumables) are limited to 5.
+	bool bIsIncomingSecondaryNeverFull = !bIsIncomingPrimary;
 	static auto AmmoClass = FindObject<UClass>(L"/Script/FortniteGame.FortAmmoItemDefinition");
 	static auto ResourceClass = FindObject<UClass>(L"/Script/FortniteGame.FortResourceItemDefinition");
 	bool bIsIncomingAmmoOrResource = (AmmoClass && PickupItemDefinition->IsA(AmmoClass)) || (ResourceClass && PickupItemDefinition->IsA(ResourceClass));
@@ -424,34 +427,22 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 			auto CurrentDef = CurrentItemEntry->GetItemDefinition();
 			if (!CurrentDef) continue;
 
-			// Ammo/Resource don't occupy quickbar slots; don't count them, but still allow stacking for same ammo type
-			bool bCurrentIsAmmoOrResource = (AmmoClass && CurrentDef->IsA(AmmoClass)) || (ResourceClass && CurrentDef->IsA(ResourceClass));
 			bool bCurrentIsPrimary = IsPrimaryQuickbar(CurrentDef);
-
-			// Only count non-ammo/resource items towards quickbar slots
-			if (!bCurrentIsAmmoOrResource)
+			// Only primary (weapons/consumables) are limited to 5; secondary (traps, building, ammo, resource, melee, edit) never considered full
+			// This restores original 1.7.2 behavior where traps were always pickupable and fixes recent trap regression
+			if (bIsIncomingSecondaryNeverFull)
 			{
-				if (bIsIncomingAmmoOrResource)
-				{
-					// Ammo/Resource incoming never counts as full
-					bIsInventoryFull = false;
-				}
-				else if (bCurrentIsPrimary == bIsIncomingPrimary)
-				{
-					int AmountOfSlotsTakenUp = 1; // TODO handle items that take multiple slots
-					SlotsFilledForIncomingType += AmountOfSlotsTakenUp;
-				}
-
-				if (!bIsIncomingAmmoOrResource)
-					bIsInventoryFull = SlotsFilledForIncomingType >= 5;
+				bIsInventoryFull = false;
+			}
+			else if (bCurrentIsPrimary) // primary incoming, count primary items
+			{
+				SlotsFilledForIncomingType += 1; // TODO handle items that take multiple slots
+				bIsInventoryFull = SlotsFilledForIncomingType >= 5;
 			}
 			else
 			{
-				// Current is ammo/resource, doesn't count; ensure inventory not considered full for ammo incoming
-				if (bIsIncomingAmmoOrResource)
-					bIsInventoryFull = false;
-				else if (!bIsIncomingAmmoOrResource)
-					bIsInventoryFull = SlotsFilledForIncomingType >= 5;
+				// Primary incoming but current is secondary – don't count
+				bIsInventoryFull = SlotsFilledForIncomingType >= 5;
 			}
 
 			if (bIsInventoryFull || (PlayerController->HasTryPickupSwap() ? PlayerController->ShouldTryPickupSwap() : false)) // probs shouldnt do in loop but alr
