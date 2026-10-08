@@ -164,33 +164,45 @@ void __fastcall ApplyHomebaseEffectsOnPlayerSetupHook(
 
     LOG_INFO(LogDev, "Old hero: {}", Hero ? Hero->GetFullName() : "InvalidObject");
 
-    UFortItemDefinition* HeroType = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_030_Athena_Commando_M_Halloween.HID_030_Athena_Commando_M_Halloween");
+    // Fixed: preserve the hero that was already set (from CID) to properly support female characters.
+    // Previous cop-out randomly picked a male hero to avoid female rigging issues; proper fix is RetrieveCharacterParts patch + CID handling.
+    static auto ItemDefinitionOffset = Hero->GetOffset("ItemDefinition");
+    auto ExistingHeroType = Hero->Get<UFortItemDefinition*>(ItemDefinitionOffset);
+    UFortItemDefinition* HeroType = nullptr;
 
-    if (Fortnite_Version == 1.72 || Fortnite_Version == 1.8)
+    if (ExistingHeroType && ExistingHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
     {
-        // Fixed: properly support all heroes including female by not excluding them.
-        // Previously this was a cop-out that randomly picked only male heroes to avoid rigging issues,
-        // but the real fix is the RetrieveCharacterParts patch and proper CID/HID handling.
-        auto AllHeroTypes = GetAllObjectsOfClass(FindObject<UClass>(L"/Script/FortniteGame.FortHeroType"));
-        std::vector<UFortItemDefinition*> AthenaHeroTypes;
+        // Keep the player's chosen hero (including female) – don't override with random male
+        HeroType = ExistingHeroType;
+        LOG_INFO(LogDev, "Keeping existing hero: {}", HeroType->GetPathName());
+    }
+    else
+    {
+        HeroType = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_030_Athena_Commando_M_Halloween.HID_030_Athena_Commando_M_Halloween");
 
-        for (int i = 0; i < AllHeroTypes.size(); i++)
+        // Fallback: if existing hero invalid and version is early, pick any Athena hero (including female) – not male-only
+        if ((Fortnite_Version == 1.72 || Fortnite_Version == 1.8) && !ExistingHeroType)
         {
-            auto CurrentHeroType = (UFortItemDefinition*)AllHeroTypes.at(i);
+            auto AllHeroTypes = GetAllObjectsOfClass(FindObject<UClass>(L"/Script/FortniteGame.FortHeroType"));
+            std::vector<UFortItemDefinition*> AthenaHeroTypes;
 
-            if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
+            for (int i = 0; i < AllHeroTypes.size(); i++)
             {
-                AthenaHeroTypes.push_back(CurrentHeroType);
+                auto CurrentHeroType = (UFortItemDefinition*)AllHeroTypes.at(i);
+                if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
+                {
+                    AthenaHeroTypes.push_back(CurrentHeroType);
+                }
             }
-        }
 
-        if (AthenaHeroTypes.size() > 0)
-        {
-            HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size());
+            if (AthenaHeroTypes.size() > 0)
+            {
+                HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size());
+                LOG_INFO(LogDev, "Fallback random hero: {}", HeroType->GetPathName());
+            }
         }
     }
 
-    static auto ItemDefinitionOffset = Hero->GetOffset("ItemDefinition");
     Hero->Get<UFortItemDefinition*>(ItemDefinitionOffset) = HeroType;
 
     return ApplyHomebaseEffectsOnPlayerSetupOriginal(GameState, a2, a3, a4, Hero, a6, a7);
@@ -1196,17 +1208,18 @@ DWORD WINAPI Main(LPVOID)
         {
             for (int i = 0; i < 400; i++)
             {
-                if (*(uint8_t*)(RetrieveCharacterPartsAddr + i) == 0x74) // jz
+                if (*(uint8_t*)(RetrieveCharacterPartsAddr + i) == 0x74) // jz -> nop to always return parts (fixes female on DS where Retrieve fails)
                 {
                     DWORD dwProtection;
-                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 1, PAGE_EXECUTE_READWRITE, &dwProtection);
+                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 2, PAGE_EXECUTE_READWRITE, &dwProtection);
 
-                    *(uint8_t*)(RetrieveCharacterPartsAddr + i) = 0x75; // jnz
+                    *(uint8_t*)(RetrieveCharacterPartsAddr + i) = 0x90; // nop
+                    *(uint8_t*)(RetrieveCharacterPartsAddr + i + 1) = 0x90; // nop (was displacement)
 
                     DWORD dwTemp;
-                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 1, dwProtection, &dwTemp);
+                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 2, dwProtection, &dwTemp);
 
-                    LOG_INFO(LogDev, "Applied RetrieveCharacterParts patch!");
+                    LOG_INFO(LogDev, "Applied RetrieveCharacterParts patch (nop)!");
                     break;
                 }
             }

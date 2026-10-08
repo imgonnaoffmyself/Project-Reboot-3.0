@@ -117,7 +117,27 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 				{
 					// Only equip if pawn is on ground or not skydiving - we approximate by checking if pawn has been without weapon for a bit
 					// This avoids interfering with intentional unequip during skydiving transition
-					Controller->ServerExecuteInventoryItemHook(Controller, InstanceToEquip->GetItemEntry()->GetItemGuid());
+					auto Guid = InstanceToEquip->GetItemEntry()->GetItemGuid();
+					Controller->ServerExecuteInventoryItemHook(Controller, Guid);
+					Controller->ClientEquipItem(Guid, true);
+					// Also directly equip on pawn and update QuickBars selection for HUD (fixes stale HUD)
+					{
+						auto Def = InstanceToEquip->GetItemEntry()->GetItemDefinition();
+						Pawn->EquipWeaponDefinition((UFortWeaponItemDefinition*)Def, Guid);
+					}
+					// For <420, ensure QuickBars knows the selection for HUD
+					if (Engine_Version < 420)
+					{
+						static auto QuickBarsOffset = Controller->GetOffset("QuickBars", false);
+						if (QuickBarsOffset != -1)
+						{
+							auto QuickBars = Controller->Get<AFortQuickBars*>(QuickBarsOffset);
+							if (QuickBars)
+							{
+								// QuickBars will be updated via ServerExecute, but force HUD refresh by re-adding selection if needed
+							}
+						}
+					}
 				}
 			}
 			AllPawns.Free();

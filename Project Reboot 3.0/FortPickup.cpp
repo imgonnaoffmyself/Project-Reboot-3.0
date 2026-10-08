@@ -484,7 +484,9 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 
 					// bForceDontAddItem = true;
 
-					continue; // ???
+					// Fix: break for loop to recalc SlotsFilledForIncomingType on next while iteration after inventory size changed.
+					// Previously continue kept stale count (>=5) and caused overflow to spawn incorrectly, leading to both items on floor impossible.
+					break;
 				}
 			}
 
