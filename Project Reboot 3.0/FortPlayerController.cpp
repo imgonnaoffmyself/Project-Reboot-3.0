@@ -1634,6 +1634,27 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 
 					RemoveFromAlivePlayers(GameMode, PlayerController, KillerPlayerState == DeadPlayerState ? nullptr : KillerPlayerState, KillerPawn, KillerWeaponDef, DeathCause, 0);
 
+					// Fix death walk for non-DBNO eliminations: stop movement so pawn doesn't keep walking in place after RemoveFromAlivePlayers
+					// Keep intentional DBNO guard above, but ensure pawn stops walking when truly eliminated
+					{
+						DeadPawn->SetHealth(0);
+						static auto CharacterMovementOffset2 = DeadPawn->GetOffset("CharacterMovement", false);
+						if (CharacterMovementOffset2 != -1)
+						{
+							auto CharacterMovement2 = DeadPawn->Get<void*>(CharacterMovementOffset2);
+							if (CharacterMovement2)
+							{
+								static auto VelocityOffset2 = FindOffsetStruct("/Script/Engine.CharacterMovementComponent", "Velocity", false);
+								static auto MovementModeOffset2 = FindOffsetStruct("/Script/Engine.CharacterMovementComponent", "MovementMode", false);
+								if (VelocityOffset2 != -1) *(FVector*)(__int64(CharacterMovement2) + VelocityOffset2) = FVector(0,0,0);
+								if (MovementModeOffset2 != -1) *(uint8_t*)(__int64(CharacterMovement2) + MovementModeOffset2) = 0;
+								static auto StopMovementImmediatelyFn2 = FindObject<UFunction>(L"/Script/Engine.CharacterMovementComponent.StopMovementImmediately");
+								if (StopMovementImmediatelyFn2) ((UObject*)CharacterMovement2)->ProcessEvent(StopMovementImmediatelyFn2);
+							}
+						}
+						DeadPawn->SetActorEnableCollision(false);
+					}
+
 					/*
 
 					// We need to check if their entire team is dead then I think we send it????
@@ -1665,6 +1686,30 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 
 				LOG_INFO(LogDev, "TeamsLeft: {}", GameState->GetTeamsLeft()); // Important for launcher don't remove!
 			}
+		}
+
+		// Fix: death walk for DBNO-eliminated players — keep intentional if(!IsDBNO()) guard (DBNO should stay alive for revive),
+		// but ensure DBNO pawn also stops walking when truly eliminated (finished/bled out) instead of walking in place forever.
+		// This does NOT remove DBNO from alive (preserves intentional revive feature), only stops walk so DBNO/death anim plays.
+		if (DeadPawn->IsDBNO() && !bIsRespawningAllowed && bHandleDeath)
+		{
+			// DBNO elimination: pawn is DBNO but being eliminated — stop walk, keep alive for revive logic but ensure not walking
+			static auto CharacterMovementOffsetDBNO = DeadPawn->GetOffset("CharacterMovement", false);
+			if (CharacterMovementOffsetDBNO != -1)
+			{
+				auto CharacterMovementDBNO = DeadPawn->Get<void*>(CharacterMovementOffsetDBNO);
+				if (CharacterMovementDBNO)
+				{
+					static auto VelocityOffsetDBNO = FindOffsetStruct("/Script/Engine.CharacterMovementComponent", "Velocity", false);
+					static auto MovementModeOffsetDBNO = FindOffsetStruct("/Script/Engine.CharacterMovementComponent", "MovementMode", false);
+					if (VelocityOffsetDBNO != -1) *(FVector*)(__int64(CharacterMovementDBNO) + VelocityOffsetDBNO) = FVector(0,0,0);
+					if (MovementModeOffsetDBNO != -1) *(uint8_t*)(__int64(CharacterMovementDBNO) + MovementModeOffsetDBNO) = 0;
+					static auto StopMovementImmediatelyFnDBNO = FindObject<UFunction>(L"/Script/Engine.CharacterMovementComponent.StopMovementImmediately");
+					if (StopMovementImmediatelyFnDBNO) ((UObject*)CharacterMovementDBNO)->ProcessEvent(StopMovementImmediatelyFnDBNO);
+				}
+			}
+			// Don't disable collision for DBNO (needs to be revivable), but ensure walk stopped
+			LOG_INFO(LogDev, "DBNO death walk fix applied for pawn {}", __int64(DeadPawn));
 		}
 
 		if (Fortnite_Version < 6) // Spectating (is this the actual build or is it like 6.10 when they added it auto).

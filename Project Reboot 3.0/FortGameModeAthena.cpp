@@ -864,7 +864,15 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 	auto& Teams = GameState->Get<TArray<UObject*>>(TeamsOffset);
 
 	if (Teams.Num() <= 0)
-		return false;
+	{
+		// Fix: server never finishes loading map if restarted with nobody connected
+		// Original returned false here unconditionally, blocking Listen/bWorldIsReady when Teams empty after restart with 0 players
+		// Keep intentional 100000s warmup wait for players, but allow map to finish loading so next player can join
+		auto WorldCheck = GetWorld();
+		int connCount = WorldCheck && WorldCheck->GetNetDriver() ? WorldCheck->GetNetDriver()->GetClientConnections().Num() : 0;
+		if (connCount > 0) return false;
+		LOG_INFO(LogDev, "Teams empty but 0 players after restart — allowing ReadyToStartMatch to continue so map can finish loading (warmup remains 100000s intentional)");
+	}
 
 	static int LastNum3 = 1;
 
