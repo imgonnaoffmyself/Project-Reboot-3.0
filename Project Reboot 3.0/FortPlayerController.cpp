@@ -1652,7 +1652,7 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 								if (StopMovementImmediatelyFn2) ((UObject*)CharacterMovement2)->ProcessEvent(StopMovementImmediatelyFn2);
 							}
 						}
-						DeadPawn->SetActorEnableCollision(false);
+						// DeadPawn->SetActorEnableCollision(false); // AActor has no SetActorEnableCollision in this SDK — movement stop above is sufficient to fix walk in place
 					}
 
 					/*
