@@ -1196,17 +1196,18 @@ DWORD WINAPI Main(LPVOID)
         {
             for (int i = 0; i < 400; i++)
             {
-                if (*(uint8_t*)(RetrieveCharacterPartsAddr + i) == 0x74) // jz
+                if (*(uint8_t*)(RetrieveCharacterPartsAddr + i) == 0x74) // jz -> nop (always return parts, fixes female on DS)
                 {
                     DWORD dwProtection;
-                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 1, PAGE_EXECUTE_READWRITE, &dwProtection);
+                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 2, PAGE_EXECUTE_READWRITE, &dwProtection);
 
-                    *(uint8_t*)(RetrieveCharacterPartsAddr + i) = 0x75; // jnz
+                    *(uint8_t*)(RetrieveCharacterPartsAddr + i) = 0x90; // nop
+                    *(uint8_t*)(RetrieveCharacterPartsAddr + i + 1) = 0x90; // nop
 
                     DWORD dwTemp;
-                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 1, dwProtection, &dwTemp);
+                    VirtualProtect((PVOID)(RetrieveCharacterPartsAddr + i), 2, dwProtection, &dwTemp);
 
-                    LOG_INFO(LogDev, "Applied RetrieveCharacterParts patch!");
+                    LOG_INFO(LogDev, "Applied RetrieveCharacterParts patch (nop)!");
                     break;
                 }
             }
