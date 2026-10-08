@@ -792,12 +792,13 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 			auto World = GetWorld();
 			if (!World || !World->GetNetDriver()) {
 				LOG_WARN(LogDev, "World or NetDriver is null during initial setup, using default duration");
-				Duration = 100000; // Default to long wait if we can't get player count
+				Duration = 15; // Short wait if we can't get player count (was 100000, caused restart with 0 players to never finish loading)
 			} else {
 				int playerCount = World->GetNetDriver()->GetClientConnections().Num();
 				
+				// If restarted with nobody connected, don't block map loading with 100k timer — use short duration so map finishes loading and next HandleStartingNewPlayer will adjust
 				if (playerCount <= 1) {
-					Duration = 100000; // 0-1 players: 100,000 seconds
+					Duration = 15; // 0-1 players: short wait so map finishes loading (was 100000, broke restart with 0 players)
 				} else if (playerCount <= 9) {
 					Duration = 300; // 2-9 players: 5 minutes
 				} else if (playerCount <= 24) {
@@ -864,7 +865,16 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 	auto& Teams = GameState->Get<TArray<UObject*>>(TeamsOffset);
 
 	if (Teams.Num() <= 0)
-		return false;
+	{
+		// Don't block map loading when restarted with nobody connected — Teams will be populated when playlist is ready and players join.
+		// Original returned false here, which caused "server never finishes loading the map if game is restarted while nobody is connected".
+		auto WorldCheck = GetWorld();
+		int connCount = WorldCheck && WorldCheck->GetNetDriver() ? WorldCheck->GetNetDriver()->GetClientConnections().Num() : 0;
+		if (connCount > 0)
+			return false;
+		// else with 0 connections after restart, allow to proceed to Listen and bWorldIsReady so map finishes loading
+		LOG_INFO(LogDev, "Teams empty but 0 players after restart — allowing ReadyToStartMatch to continue so map can finish loading");
+	}
 
 	static int LastNum3 = 1;
 
@@ -1291,7 +1301,7 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 		int playerCount = World->GetNetDriver()->GetClientConnections().Num();
 		
 		// Determine gamemode-specific minimum player requirements
-		int minimumPlayers = 2; // Default for Solo
+		int minimumPlayers = 1; // Default for Solo (was 2, caused 1 player to wait 100k)
 		std::string gamemodeName = "Solo";
 		
 		if (PlaylistName.find("50v50") != std::string::npos) {
@@ -1310,8 +1320,8 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 		float NewDuration;
 		
 		if (playerCount < minimumPlayers) {
-			NewDuration = 100000; // Wait for minimum players: 100,000 seconds
-			LOG_INFO(LogPlayer, "Below minimum players ({}/{}), setting extended wait timer", playerCount, minimumPlayers);
+			NewDuration = 60; // Wait for minimum players: 60 seconds (was 100000, caused never loading after restart with 0 players - now short wait, will extend as more join)
+			LOG_INFO(LogPlayer, "Below minimum players ({}/{}), setting short wait timer", playerCount, minimumPlayers);
 		} else if (playerCount >= minimumPlayers && playerCount <= 9) {
 			NewDuration = 300; // Minimum met, 5 minutes to allow more players
 			LOG_INFO(LogPlayer, "Minimum players met, 5 minute timer for additional players");

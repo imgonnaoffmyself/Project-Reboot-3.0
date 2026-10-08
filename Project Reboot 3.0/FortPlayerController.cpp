@@ -1604,35 +1604,60 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 
 		LOG_INFO(LogDev, "PlayersLeft: {} IsDBNO: {}", GameState->GetPlayersLeft(), DeadPawn->IsDBNO());
 
-		if (!DeadPawn->IsDBNO())
+		// Fix: eliminated player walked in place forever because RemoveFromAlivePlayers was skipped when IsDBNO() == true (DBNO players who were then eliminated were never removed from alive list, so pawn stayed walking)
+		// Also need to stop the pawn's movement and ensure death anim plays — otherwise the replicated pawn keeps walking in place on clients until disconnect.
+		if (bHandleDeath)
 		{
-			if (bHandleDeath)
+			if (Fortnite_Version > 1.8 || Fortnite_Version == 1.11)
 			{
-				if (Fortnite_Version > 1.8 || Fortnite_Version == 1.11)
+				static void (*RemoveFromAlivePlayers)(AFortGameModeAthena * GameMode, AFortPlayerController * PlayerController, APlayerState * PlayerState, APawn * FinisherPawn,
+					UFortWeaponItemDefinition * FinishingWeapon, uint8_t DeathCause, char a7)
+					= decltype(RemoveFromAlivePlayers)(Addresses::RemoveFromAlivePlayers);
+
+				AActor* DamageCauser = *(AActor**)(__int64(DeathReport) + MemberOffsets::DeathReport::DamageCauser);
+				UFortWeaponItemDefinition* KillerWeaponDef = nullptr;
+
+				static auto FortProjectileBaseClass = FindObject<UClass>(L"/Script/FortniteGame.FortProjectileBase");
+
+				if (DamageCauser)
 				{
-					static void (*RemoveFromAlivePlayers)(AFortGameModeAthena * GameMode, AFortPlayerController * PlayerController, APlayerState * PlayerState, APawn * FinisherPawn,
-						UFortWeaponItemDefinition * FinishingWeapon, uint8_t DeathCause, char a7)
-						= decltype(RemoveFromAlivePlayers)(Addresses::RemoveFromAlivePlayers);
-
-					AActor* DamageCauser = *(AActor**)(__int64(DeathReport) + MemberOffsets::DeathReport::DamageCauser);
-					UFortWeaponItemDefinition* KillerWeaponDef = nullptr;
-
-					static auto FortProjectileBaseClass = FindObject<UClass>(L"/Script/FortniteGame.FortProjectileBase");
-
-					if (DamageCauser)
+					if (DamageCauser->IsA(FortProjectileBaseClass))
 					{
-						if (DamageCauser->IsA(FortProjectileBaseClass))
+						auto Owner = Cast<AFortWeapon>(DamageCauser->GetOwner());
+						KillerWeaponDef = Owner->IsValidLowLevel() ? Owner->GetWeaponData() : nullptr;
+					}
+					if (auto Weapon = Cast<AFortWeapon>(DamageCauser))
+					{
+						KillerWeaponDef = Weapon->GetWeaponData();
+					}
+				}
+
+				RemoveFromAlivePlayers(GameMode, PlayerController, KillerPlayerState == DeadPlayerState ? nullptr : KillerPlayerState, KillerPawn, KillerWeaponDef, DeathCause, 0);
+
+				// Fix death animation: stop pawn movement, disable collision, hide pawn after a short delay so death montage can play instead of walking in place
+				// The pawn was never destroyed/had movement disabled, so clients kept replicating walking anim
+				{
+					DeadPawn->SetHealth(0);
+					// Stop movement immediately — fixes "walks in place forever" (pawn kept replicating walking anim after elimination)
+					static auto CharacterMovementOffset = DeadPawn->GetOffset("CharacterMovement", false);
+					if (CharacterMovementOffset != -1)
+					{
+						auto CharacterMovement = DeadPawn->Get<void*>(CharacterMovementOffset);
+						if (CharacterMovement)
 						{
-							auto Owner = Cast<AFortWeapon>(DamageCauser->GetOwner());
-							KillerWeaponDef = Owner->IsValidLowLevel() ? Owner->GetWeaponData() : nullptr; // I just added the IsValidLowLevel check because what if the weapon destroys (idk)?
-						}
-						if (auto Weapon = Cast<AFortWeapon>(DamageCauser))
-						{
-							KillerWeaponDef = Weapon->GetWeaponData();
+							static auto VelocityOffset = FindOffsetStruct("/Script/Engine.CharacterMovementComponent", "Velocity", false);
+							static auto MovementModeOffset = FindOffsetStruct("/Script/Engine.CharacterMovementComponent", "MovementMode", false);
+							if (VelocityOffset != -1) *(FVector*)(__int64(CharacterMovement) + VelocityOffset) = FVector(0,0,0);
+							if (MovementModeOffset != -1) *(uint8_t*)(__int64(CharacterMovement) + MovementModeOffset) = 0; // MOVE_None
+							static auto StopMovementImmediatelyFn = FindObject<UFunction>(L"/Script/Engine.CharacterMovementComponent.StopMovementImmediately");
+							if (StopMovementImmediatelyFn) ((UObject*)CharacterMovement)->ProcessEvent(StopMovementImmediatelyFn);
 						}
 					}
-
-					RemoveFromAlivePlayers(GameMode, PlayerController, KillerPlayerState == DeadPlayerState ? nullptr : KillerPlayerState, KillerPawn, KillerWeaponDef, DeathCause, 0);
+					// Disable collision so dead pawn doesn't block
+					DeadPawn->SetActorEnableCollision(false);
+					// Also ensure DBNO is cleared so death state is not confused with DBNO
+					if (DeadPawn->IsDBNO()) DeadPawn->SetDBNO(false);
+				}
 
 					/*
 
@@ -1661,11 +1686,8 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 					LOG_INFO(LogDev, "Removed!");
 				}
 
-				// LOG_INFO(LogDev, "KillerPlayerState->Place: {}", KillerPlayerState ? KillerPlayerState->GetPlace() : -1);
-
 				LOG_INFO(LogDev, "TeamsLeft: {}", GameState->GetTeamsLeft()); // Important for launcher don't remove!
 			}
-		}
 
 		if (Fortnite_Version < 6) // Spectating (is this the actual build or is it like 6.10 when they added it auto).
 		{
