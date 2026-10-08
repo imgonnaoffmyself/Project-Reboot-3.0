@@ -729,7 +729,7 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 	{
 		// Even for early versions we need to ensure pickaxe is equipped after jump, previous attempts didn't work
 		auto OriginalPC = PlayerController;
-		auto Ret = ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+		ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
 		// Equip pickaxe after original jump (fixes: not switched to pickaxe when jumping)
 		if (OriginalPC)
 		{
@@ -744,11 +744,14 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 				}
 			}
 		}
-		return Ret;
+		return;
 	}
 
 	if (!PlayerController)
-		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+	{
+		ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+		return;
+	}
 
 	// if (!PlayerController->bInAircraft) 
 		// return;
@@ -774,7 +777,10 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 	}
 
 	if (!AircraftToJumpFrom)
-		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+	{
+		ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+		return;
+	}
 
 	if (false)
 	{

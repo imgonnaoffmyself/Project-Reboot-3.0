@@ -74,7 +74,7 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 			for (int i = 0; i < AllPawns.Num(); ++i)
 			{
 				auto Pawn = (AFortPlayerPawn*)AllPawns.at(i);
-				if (!Pawn || Pawn->IsPendingKillPending() || Pawn->IsActorBeingDestroyed() || Pawn->IsDestroyed())
+				if (!Pawn || Pawn->IsPendingKillPending() || Pawn->IsActorBeingDestroyed())
 					continue;
 				if (Pawn->IsDBNO())
 					continue;

@@ -582,6 +582,39 @@ void Addresses::Init()
 	else UnchunkedObjects = decltype(UnchunkedObjects)(ObjectArray);
 }
 
+// Helper to scan for the second E8 call after a string ref without requiring object unwinding in the caller.
+// This isolates __try/__except (which cannot coexist with C++ destructors) into a function with only POD types.
+static uint64 ScanForSecondCallTarget(uint64 strRef)
+{
+	int NumCalls = 0;
+	uint64 result = 0;
+	for (int i = 0; i < 2000; ++i)
+	{
+		uint8_t* bytePtr = (uint8_t*)(strRef + i);
+		__try
+		{
+			if (*bytePtr == 0xE8)
+			{
+				NumCalls++;
+				if (NumCalls == 2)
+				{
+					// Compute call target manually to avoid constructing Memcury::Scanner inside __try (which would need unwinding)
+					int32_t rel = *(int32_t*)(bytePtr + 1);
+					result = strRef + i + 5 + (int64_t)rel;
+					// break out; exception handler will handle guard, loop will exit via result check
+				}
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			// best-effort scan, ignore guard faults
+		}
+		if (result != 0)
+			break;
+	}
+	return result;
+}
+
 std::vector<uint64> Addresses::GetFunctionsToReturnTrue()
 {
 	std::vector<uint64> toReturnTrue;
@@ -607,31 +640,11 @@ std::vector<uint64> Addresses::GetFunctionsToReturnTrue()
 		auto strRef = Memcury::Scanner::FindStringRef(L"OnDestroyReservedSessionComplete %s bSuccess: %d").Get();
 		if (strRef)
 		{
-			int NumCalls = 0;
-			for (int i = 0; i < 2000; i++)
+			uint64 target = ScanForSecondCallTarget(strRef);
+			if (target)
 			{
-				uint8_t* bytePtr = (uint8_t*)(strRef + i);
-				__try
-				{
-					if (*bytePtr == 0xE8)
-					{
-						NumCalls++;
-						if (NumCalls == 2)
-						{
-							auto target = Memcury::Scanner(strRef + i).RelativeOffset(1).Get();
-							if (target)
-							{
-								LOG_INFO(LogDev, "1.9 NoReserve candidate: 0x{:x}", target - __int64(GetModuleHandleW(0)));
-								toReturnTrue.push_back(target);
-							}
-							break;
-						}
-					}
-				}
-				__except(EXCEPTION_EXECUTE_HANDLER)
-				{
-					// best-effort scan
-				}
+				LOG_INFO(LogDev, "1.9 NoReserve candidate: 0x{:x}", target - __int64(GetModuleHandleW(0)));
+				toReturnTrue.push_back(target);
 			}
 		}
 	}
