@@ -601,6 +601,41 @@ std::vector<uint64> Addresses::GetFunctionsToReturnTrue()
 		// toReturnTrue.push_back(Memcury::Scanner::FindPattern("48 89 5C 24 ? 48 89 74 24 ? 57 48 83 EC 20 48 8B 01 49 8B F0 33 DB FF 50 20 48 8B F8").Get()); // funny session thingy
 	}
 
+	// Add a 1.9 (Engine 4.16) fallback using string-anchored scanning to locate the reservation validation
+	if (Engine_Version == 416 && Fortnite_Version == 1.9)
+	{
+		auto strRef = Memcury::Scanner::FindStringRef(L"OnDestroyReservedSessionComplete %s bSuccess: %d").Get();
+		if (strRef)
+		{
+			int NumCalls = 0;
+			for (int i = 0; i < 2000; i++)
+			{
+				uint8_t* bytePtr = (uint8_t*)(strRef + i);
+				__try
+				{
+					if (*bytePtr == 0xE8)
+					{
+						NumCalls++;
+						if (NumCalls == 2)
+						{
+							auto target = Memcury::Scanner(strRef + i).RelativeOffset(1).Get();
+							if (target)
+							{
+								LOG_INFO(LogDev, "1.9 NoReserve candidate: 0x{:x}", target - __int64(GetModuleHandleW(0)));
+								toReturnTrue.push_back(target);
+							}
+							break;
+						}
+					}
+				}
+				__except(EXCEPTION_EXECUTE_HANDLER)
+				{
+					// best-effort scan
+				}
+			}
+		}
+	}
+
 	if (Engine_Version >= 426)
 	{
 		toReturnTrue.push_back(Memcury::Scanner::FindPattern("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 60 20 55 41 56 41 57 48 8B EC 48 83 EC 60 49 8B D9 45 8A").Get()); // No reserve

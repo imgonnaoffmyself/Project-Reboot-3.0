@@ -17,24 +17,45 @@ void AFortPickup::TossPickup(FVector FinalLocation, AFortPawn* ItemOwner, int Ov
 	struct { FVector FinalLocation; AFortPawn* ItemOwner; int OverrideMaxStackCount; bool bToss;
 	uint8 InPickupSourceTypeFlags; uint8 InPickupSpawnSource; }
 	AFortPickup_TossPickup_Params{FinalLocation, ItemOwner, OverrideMaxStackCount, bToss, InPickupSourceTypeFlags, InPickupSpawnSource};
-
 	this->ProcessEvent(fn, &AFortPickup_TossPickup_Params);
 }
 
 void AFortPickup::SpawnMovementComponent()
 {
-	static auto ProjectileMovementComponentClass = FindObject<UClass>("/Script/Engine.ProjectileMovementComponent"); // UFortProjectileMovementComponent
+    static UClass* ProjectileMovementComponentClass = []() -> UClass*
+    {
+        if (auto FortClass = FindObject<UClass>(L"/Script/FortniteGame.FortProjectileMovementComponent"))
+        {
+            return FortClass;
+        }
 
-	static auto MovementComponentOffset = this->GetOffset("MovementComponent");
-	
-	if (auto NewComponent = UGameplayStatics::SpawnObject(ProjectileMovementComponentClass, this))
-	{
-		this->Get(MovementComponentOffset) = NewComponent;
-	}
-	else
-	{
+        return FindObject<UClass>(L"/Script/Engine.ProjectileMovementComponent");
+    }();
 
-	}
+    static const auto MovementComponentOffset = this->GetOffset("MovementComponent");
+
+    if (!ProjectileMovementComponentClass || MovementComponentOffset == -1)
+    {
+        LOG_WARN(LogGame, "Unable to resolve projectile movement component class or offset.");
+        return;
+    }
+
+    auto* ExistingComponent = this->Get<UObject*>(MovementComponentOffset);
+
+    if (ExistingComponent && ExistingComponent->IsA(ProjectileMovementComponentClass))
+    {
+        return;
+    }
+
+    auto* NewComponent = UGameplayStatics::SpawnObject(ProjectileMovementComponentClass, this);
+
+    if (!NewComponent)
+    {
+        const std::string ClassName = ProjectileMovementComponentClass ? ProjectileMovementComponentClass->GetFullName() : std::string("InvalidClass");
+        LOG_WARN(LogGame, "Failed to spawn projectile movement component of class {}.", ClassName);
+        return;
+    }
+
 }
 
 AFortPickup* AFortPickup::SpawnPickup(PickupCreateData& PickupData)
