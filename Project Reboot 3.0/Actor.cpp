@@ -8,6 +8,7 @@
 bool AActor::HasAuthority()
 {
 	static auto RoleOffset = GetOffset("Role");
+
 	return Get<uint8_t>(RoleOffset) == 3;
 }
 
@@ -27,6 +28,7 @@ bool AActor::IsTearOff()
 int32& AActor::GetNetTag()
 {
 	static auto NetTagOffset = GetOffset("NetTag");
+	
 	return Get<int32>(NetTagOffset);
 }
 
