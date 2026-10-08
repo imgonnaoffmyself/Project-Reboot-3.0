@@ -329,13 +329,6 @@ void AFortPickup::CombinePickupHook(AFortPickup* Pickup)
 
 char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 {
-	// Guard against double pickup from spamming (pickup already marked as picked up but not yet destroyed)
-	static auto bPickedUpOffset = Pickup->GetOffset("bPickedUp", false);
-	if (bPickedUpOffset != -1 && Pickup->Get<bool>(bPickedUpOffset))
-	{
-		// Already being picked up – ignore duplicate request and let original complete
-		return CompletePickupAnimationOriginal(Pickup);
-	}
 	if (Pickup->IsPendingKillPending() || Pickup->IsActorBeingDestroyed())
 		return CompletePickupAnimationOriginal(Pickup);
 
