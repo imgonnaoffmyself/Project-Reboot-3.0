@@ -30,16 +30,17 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 		if (bIsBrokenFemale)
 		{
 			// Find a working female HID to copy parts from (avoid the broken ones)
+			// HID_005_Athena_Commando_F does NOT exist (HID_005_M is male), so use STW Ramirez as fallback which is the game's default skeleton and is known to be correctly rigged.
 			static UFortItemDefinition* WorkingFemaleHID = nullptr;
 			if (!WorkingFemaleHID)
 			{
-				// Try known working female HIDs in order of preference
+				// Try known working female HIDs in order of preference — STW Ramirez is the most reliable fallback since it's correctly rigged in all versions
 				const wchar_t* Candidates[] = {
-					L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F",
-					L"/Game/Athena/Heroes/HID_006_Athena_Commando_F.HID_006_Athena_Commando_F",
+					L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", // for 1.72 this is working (only 001_F broken)
+					L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F", // also working in 1.72
+					L"/Game/Athena/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01", // STW starter Ramirez — correctly rigged, game's default fallback
+					L"/Game/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01",
 					L"/Game/Athena/Heroes/HID_037_Athena_Commando_F.HID_037_Athena_Commando_F",
-					L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", // for 1.72 this is working
-					L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F",
 				};
 				for (auto CandPath : Candidates)
 				{
@@ -58,7 +59,7 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 						}
 					}
 				}
-				// Fallback: find any Athena female not in broken list via scan
+				// Fallback: find any Athena female not in broken list via scan, then STW heroes
 				if (!WorkingFemaleHID)
 				{
 					auto AllHeroTypes = GetAllObjectsOfClass(FindObject<UClass>(L"/Script/FortniteGame.FortHeroType"));
@@ -77,13 +78,65 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 							break;
 						}
 					}
+					if (!WorkingFemaleHID)
+					{
+						// Last resort: STW Ramirez GrenadeGun — exists in all versions and is correctly rigged
+						auto STW1 = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01");
+						auto STW2 = FindObject<UFortItemDefinition>(L"/Game/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01");
+						if (STW1) WorkingFemaleHID = STW1;
+						else if (STW2) WorkingFemaleHID = STW2;
+						if (WorkingFemaleHID) LOG_INFO(LogDev, "Female fix: using STW fallback {} for broken {}", WorkingFemaleHID->GetPathName(), HeroPath);
+					}
 				}
 			}
 			if (WorkingFemaleHID)
 			{
-				// Use the working HID's Specializations/CharacterParts instead of the broken one's
-				HeroDefinition = WorkingFemaleHID;
-				LOG_INFO(LogDev, "Female fix: remapped broken HID {} to working HID {}", HeroPath, WorkingFemaleHID->GetPathName());
+				// Copy CharacterParts from working HID into broken HeroDefinition's Specializations instead of remapping entire HeroDefinition (keeps health/backpack)
+				static auto HeroDefOffset_Working = WorkingFemaleHID->GetOffset("HeroDefinition");
+				static auto HeroDefOffset_BrokenForCopy = HeroDefinition ? HeroDefinition->GetOffset("Specializations") : -1;
+				UObject* WorkingHeroDef = HeroDefOffset_Working != -1 ? WorkingFemaleHID->Get<UObject*>(HeroDefOffset_Working) : nullptr;
+				// If working HID is already a HeroDefinition itself (STW case where HID is the definition), handle directly
+				if (!WorkingHeroDef && WorkingFemaleHID->GetClass() && std::wstring(WorkingFemaleHID->GetClass()->GetName()).contains(L"FortHero"))
+					WorkingHeroDef = WorkingFemaleHID;
+				if (WorkingHeroDef)
+				{
+					static auto SpecOffset_Broken = HeroDefinition->GetOffset("Specializations");
+					static auto SpecOffset_Working = WorkingHeroDef->GetOffset("Specializations");
+					if (SpecOffset_Broken != -1 && SpecOffset_Working != -1)
+					{
+						auto& BrokenSpecs = HeroDefinition->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Broken);
+						auto& WorkingSpecs = WorkingHeroDef->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Working);
+						if (BrokenSpecs.Num() > 0 && WorkingSpecs.Num() > 0)
+						{
+							for (int s = 0; s < BrokenSpecs.Num() && s < WorkingSpecs.Num(); ++s)
+							{
+								auto BrokenSpec = BrokenSpecs.at(s).Get(FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization"), true);
+								auto WorkingSpec = WorkingSpecs.at(s).Get(FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization"), true);
+								if (!BrokenSpec || !WorkingSpec) continue;
+								static auto CharPartsOffset_Broken2 = BrokenSpec->GetOffset("CharacterParts");
+								static auto CharPartsOffset_Working2 = WorkingSpec->GetOffset("CharacterParts");
+								if (CharPartsOffset_Broken2 == -1 || CharPartsOffset_Working2 == -1) continue;
+								auto& BrokenParts = BrokenSpec->Get<TArray<TSoftObjectPtr<UObject>>>(CharPartsOffset_Broken2);
+								auto& WorkingParts = WorkingSpec->Get<TArray<TSoftObjectPtr<UObject>>>(CharPartsOffset_Working2);
+								if (WorkingParts.Num() == 0) continue;
+								LOG_INFO(LogDev, "Female fix: remapped broken HID {} to working HID {} (copied {} parts)", HeroPath, WorkingFemaleHID->GetPathName(), WorkingParts.Num());
+								BrokenParts.Free();
+								for (int p = 0; p < WorkingParts.Num(); ++p) BrokenParts.Add(WorkingParts.at(p));
+							}
+						}
+						else
+						{
+							// Fallback to full remap if specialization copy fails
+							HeroDefinition = WorkingHeroDef;
+							LOG_INFO(LogDev, "Female fix: fallback remapped broken HID {} to working HID {}", HeroPath, WorkingFemaleHID->GetPathName());
+						}
+					}
+				}
+				else
+				{
+					HeroDefinition = WorkingFemaleHID;
+					LOG_INFO(LogDev, "Female fix: remapped broken HID {} to working HID {}", HeroPath, WorkingFemaleHID->GetPathName());
+				}
 			}
 		}
 	}

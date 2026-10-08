@@ -1226,14 +1226,22 @@ DWORD WINAPI Main(LPVOID)
             auto BrokenHID = FindObject<UFortItemDefinition>(BrokenPath);
             auto FallbackHID = FindObject<UFortItemDefinition>(FallbackPath);
             if (!BrokenHID || !FallbackHID) return;
-            static auto HeroDefOffset_Broken = BrokenHID->GetOffset("HeroDefinition");
-            static auto HeroDefOffset_Fallback = FallbackHID->GetOffset("HeroDefinition");
-            if (HeroDefOffset_Broken == -1 || HeroDefOffset_Fallback == -1) return;
-            auto BrokenHeroDef = BrokenHID->Get<UObject*>(HeroDefOffset_Broken);
-            auto FallbackHeroDef = FallbackHID->Get<UObject*>(HeroDefOffset_Fallback);
+            UObject* BrokenHeroDef = nullptr;
+            UObject* FallbackHeroDef = nullptr;
+            auto HeroDefOffset_Broken = BrokenHID->GetOffset("HeroDefinition");
+            auto HeroDefOffset_Fallback = FallbackHID->GetOffset("HeroDefinition");
+            if (HeroDefOffset_Broken != -1) BrokenHeroDef = BrokenHID->Get<UObject*>(HeroDefOffset_Broken);
+            if (HeroDefOffset_Fallback != -1) FallbackHeroDef = FallbackHID->Get<UObject*>(HeroDefOffset_Fallback);
+            if (!BrokenHeroDef) BrokenHeroDef = BrokenHID; // HID itself may be HeroDefinition
+            if (!FallbackHeroDef)
+            {
+                // STW case: FallbackHID may itself be HeroDefinition with Specializations
+                if (FallbackHID->GetOffset("Specializations") != -1) FallbackHeroDef = FallbackHID;
+                else return;
+            }
             if (!BrokenHeroDef || !FallbackHeroDef) return;
-            static auto SpecOffset_Broken = BrokenHeroDef->GetOffset("Specializations");
-            static auto SpecOffset_Fallback = FallbackHeroDef->GetOffset("Specializations");
+            auto SpecOffset_Broken = BrokenHeroDef->GetOffset("Specializations");
+            auto SpecOffset_Fallback = FallbackHeroDef->GetOffset("Specializations");
             if (SpecOffset_Broken == -1 || SpecOffset_Fallback == -1) return;
             auto& BrokenSpecs = BrokenHeroDef->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Broken);
             auto& FallbackSpecs = FallbackHeroDef->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Fallback);
@@ -1259,29 +1267,73 @@ DWORD WINAPI Main(LPVOID)
             }
         };
 
-        // 1.72: only HID_001_F is broken
+        // 1.72: only HID_001_F is broken — use HID_002_F (exists and is working in 1.72)
         if (Fortnite_Version == 1.72)
         {
             FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F");
-            // If HID_002_F also broken in this build, try HID_005_F
+            // If HID_002_F not found (rare), fallback to STW Ramirez (correctly rigged default skeleton)
             auto TestHID = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
             if (TestHID)
             {
-                // Verify fix by checking if still broken, fallback to HID_005_F
-                auto HID_005 = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F");
-                if (HID_005) FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F");
+                const wchar_t* STWFallbacks[] = {
+                    L"/Game/Athena/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01",
+                    L"/Game/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01",
+                    L"/Game/Athena/Heroes/HID_Commando_Flopper_UC_T01.HID_Commando_Flopper_UC_T01"
+                };
+                for (auto FB : STWFallbacks)
+                {
+                    auto STW = FindObject<UFortItemDefinition>(FB);
+                    if (STW) { FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", FB); break; }
+                }
             }
         }
         else if (Fortnite_Version == 1.8)
         {
-            // 1.8: HID_001-004_F are broken, use HID_005_F or later as source
-            const wchar_t* Fallback = L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F";
-            if (!FindObject<UFortItemDefinition>(Fallback)) Fallback = L"/Game/Athena/Heroes/HID_006_Athena_Commando_F.HID_006_Athena_Commando_F";
-            if (!FindObject<UFortItemDefinition>(Fallback)) Fallback = L"/Game/Athena/Heroes/HID_037_Athena_Commando_F.HID_037_Athena_Commando_F";
-            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", Fallback);
-            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", Fallback);
-            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F", Fallback);
-            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_004_Athena_Commando_F.HID_004_Athena_Commando_F", Fallback);
+            // 1.8: HID_001-004_F are broken, no working Athena female exists (HID_005_F does not exist, 005_M is male) — use STW Ramirez GrenadeGun as source (correctly rigged, game's default)
+            const wchar_t* Fallback = nullptr;
+            const wchar_t* FallbackCandidates[] = {
+                L"/Game/Athena/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01",
+                L"/Game/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01",
+                L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", // will be skipped if broken but try anyway
+                L"/Game/Athena/Heroes/HID_037_Athena_Commando_F.HID_037_Athena_Commando_F",
+            };
+            for (auto Cand : FallbackCandidates)
+            {
+                if (FindObject<UFortItemDefinition>(Cand))
+                {
+                    auto CandStr = std::wstring(Cand);
+                    bool bCandBroken = CandStr.find(L"HID_001_Athena_Commando_F") != std::wstring::npos || CandStr.find(L"HID_002_Athena_Commando_F") != std::wstring::npos || CandStr.find(L"HID_003_Athena_Commando_F") != std::wstring::npos || CandStr.find(L"HID_004_Athena_Commando_F") != std::wstring::npos;
+                    if (!bCandBroken) { Fallback = Cand; break; }
+                    // Even if candidate is in broken list, allow STW GrenadeGun which is never in that list
+                    if (CandStr.find(L"GrenadeGun") != std::wstring::npos) { Fallback = Cand; break; }
+                }
+            }
+            if (!Fallback)
+            {
+                // Scan for any STW GrenadeGun hero
+                auto AllHeroes = GetAllObjectsOfClass(FindObject<UClass>(L"/Script/FortniteGame.FortHeroType"));
+                for (int i = 0; i < AllHeroes.size(); ++i)
+                {
+                    auto H = (UFortItemDefinition*)AllHeroes.at(i);
+                    auto HP = H->GetPathName();
+                    if (HP.contains("GrenadeGun") && HP.contains("HID_Commando"))
+                    {
+                        Fallback = L"/Game/Athena/Heroes/HID_Commando_GrenadeGun_UC_T01.HID_Commando_GrenadeGun_UC_T01"; // use canonical
+                        break;
+                    }
+                }
+            }
+            if (Fallback)
+            {
+                FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", Fallback);
+                FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", Fallback);
+                FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F", Fallback);
+                FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_004_Athena_Commando_F.HID_004_Athena_Commando_F", Fallback);
+            }
+            else
+            {
+                LOG_WARN(LogDev, "Female fix: no valid fallback found for 1.8 broken HIDs (HID_005_F does not exist, GrenadeGun not found)");
+            }
         }
     }
 
