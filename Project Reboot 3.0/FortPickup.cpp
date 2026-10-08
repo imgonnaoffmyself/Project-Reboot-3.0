@@ -329,6 +329,16 @@ void AFortPickup::CombinePickupHook(AFortPickup* Pickup)
 
 char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 {
+	// Guard against double pickup from spamming (pickup already marked as picked up but not yet destroyed)
+	static auto bPickedUpOffset = Pickup->GetOffset("bPickedUp", false);
+	if (bPickedUpOffset != -1 && Pickup->Get<bool>(bPickedUpOffset))
+	{
+		// Already being picked up – ignore duplicate request and let original complete
+		return CompletePickupAnimationOriginal(Pickup);
+	}
+	if (Pickup->IsPendingKillPending() || Pickup->IsActorBeingDestroyed())
+		return CompletePickupAnimationOriginal(Pickup);
+
 	auto Pawn = Cast<AFortPlayerPawn>(Pickup->GetPickupLocationData()->GetPickupTarget());
 
 	if (!Pawn)
@@ -452,6 +462,53 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 				// Fixed: allow swapping for both primary and secondary items when quickbar types match
 				// Previously only allowed swap when incoming was primary, breaking healing item swaps
 				bool bSwapIsSameQuickbar = ItemDefinitionToSwap ? (IsPrimaryQuickbar(ItemDefinitionToSwap) == bIsIncomingPrimary) : false;
+				// Fallback for spamming / stale GUID: if the pickup's GUID is no longer in inventory (e.g., after 2 swaps the GUID is stale),
+				// find a valid droppable item of the same quickbar type to swap instead of failing and leaving the pickup impossible.
+				if (!ItemInstanceToSwap && bIsInventoryFull && bIsIncomingPrimary && !bHasSwapped)
+				{
+					// Try currently equipped weapon first (most intuitive swap)
+					auto CurrentWeapon = Pawn->GetCurrentWeapon();
+					if (CurrentWeapon)
+					{
+						auto HeldGuid = CurrentWeapon->GetItemEntryGuid();
+						auto HeldInstance = WorldInventory->FindItemInstance(HeldGuid);
+						if (HeldInstance && HeldInstance->GetItemEntry() && HeldInstance->GetItemEntry()->GetItemDefinition())
+						{
+							auto HeldDef = HeldInstance->GetItemEntry()->GetItemDefinition();
+							bool bHeldIsAmmoRes = (AmmoClass && HeldDef->IsA(AmmoClass)) || (ResourceClass && HeldDef->IsA(ResourceClass));
+							if (!bHeldIsAmmoRes && HeldDef->CanBeDropped() && IsPrimaryQuickbar(HeldDef) == bIsIncomingPrimary)
+							{
+								ItemInstanceToSwap = HeldInstance;
+								ItemEntryToSwap = HeldInstance->GetItemEntry();
+								ItemDefinitionToSwap = Cast<UFortWorldItemDefinition>(ItemEntryToSwap->GetItemDefinition());
+								CurrentItemGuid = ItemEntryToSwap->GetItemGuid();
+								bSwapIsSameQuickbar = ItemDefinitionToSwap ? (IsPrimaryQuickbar(ItemDefinitionToSwap) == bIsIncomingPrimary) : false;
+							}
+						}
+					}
+					if (!ItemInstanceToSwap)
+					{
+						for (int _swapIdx = 0; _swapIdx < ItemInstances.Num(); ++_swapIdx)
+						{
+							auto Inst = ItemInstances.at(_swapIdx);
+							if (!Inst) continue;
+							auto Entry = Inst->GetItemEntry();
+							if (!Entry) continue;
+							auto Def = Entry->GetItemDefinition();
+							if (!Def) continue;
+							if (IsPrimaryQuickbar(Def) != bIsIncomingPrimary) continue;
+							if (!Def->CanBeDropped()) continue;
+							bool bIsAmmoRes2 = (AmmoClass && Def->IsA(AmmoClass)) || (ResourceClass && Def->IsA(ResourceClass));
+							if (bIsAmmoRes2) continue;
+							ItemInstanceToSwap = Inst;
+							ItemEntryToSwap = Entry;
+							ItemDefinitionToSwap = Cast<UFortWorldItemDefinition>(Def);
+							CurrentItemGuid = ItemEntryToSwap->GetItemGuid();
+							bSwapIsSameQuickbar = true;
+							break;
+						}
+					}
+				}
 				if (ItemInstanceToSwap && ItemDefinitionToSwap && ItemDefinitionToSwap->CanBeDropped() && !bHasSwapped && bSwapIsSameQuickbar) // swap
 				{
 					auto SwappedPickup = SpawnPickup(ItemEntryToSwap, PawnLoc, EFortPickupSourceTypeFlag::GetPlayerValue(), 0, Pawn);

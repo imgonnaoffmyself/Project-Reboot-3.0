@@ -1218,6 +1218,73 @@ DWORD WINAPI Main(LPVOID)
         }
     }
 
+    // Fix broken female HIDs' CharacterParts at startup (1.72: HID_001_F, 1.8: HID_001-004_F have misaligned skeleton)
+    // Copy CharacterParts from a working female HID to avoid arms/legs through stomach while keeping female (not cop-out to male)
+    if (Fortnite_Version == 1.72 || Fortnite_Version == 1.8)
+    {
+        auto FixBrokenFemaleHID = [](const wchar_t* BrokenPath, const wchar_t* FallbackPath) {
+            auto BrokenHID = FindObject<UFortItemDefinition>(BrokenPath);
+            auto FallbackHID = FindObject<UFortItemDefinition>(FallbackPath);
+            if (!BrokenHID || !FallbackHID) return;
+            static auto HeroDefOffset_Broken = BrokenHID->GetOffset("HeroDefinition");
+            static auto HeroDefOffset_Fallback = FallbackHID->GetOffset("HeroDefinition");
+            if (HeroDefOffset_Broken == -1 || HeroDefOffset_Fallback == -1) return;
+            auto BrokenHeroDef = BrokenHID->Get<UObject*>(HeroDefOffset_Broken);
+            auto FallbackHeroDef = FallbackHID->Get<UObject*>(HeroDefOffset_Fallback);
+            if (!BrokenHeroDef || !FallbackHeroDef) return;
+            static auto SpecOffset_Broken = BrokenHeroDef->GetOffset("Specializations");
+            static auto SpecOffset_Fallback = FallbackHeroDef->GetOffset("Specializations");
+            if (SpecOffset_Broken == -1 || SpecOffset_Fallback == -1) return;
+            auto& BrokenSpecs = BrokenHeroDef->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Broken);
+            auto& FallbackSpecs = FallbackHeroDef->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Fallback);
+            if (BrokenSpecs.Num() == 0 || FallbackSpecs.Num() == 0) return;
+            // For each specialization, copy CharacterParts from fallback
+            for (int s = 0; s < BrokenSpecs.Num() && s < FallbackSpecs.Num(); ++s)
+            {
+                auto BrokenSpec = BrokenSpecs.at(s).Get(FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization"), true);
+                auto FallbackSpec = FallbackSpecs.at(s).Get(FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization"), true);
+                if (!BrokenSpec || !FallbackSpec) continue;
+                static auto CharPartsOffset_Broken = BrokenSpec->GetOffset("CharacterParts");
+                static auto CharPartsOffset_Fallback = FallbackSpec->GetOffset("CharacterParts");
+                if (CharPartsOffset_Broken == -1 || CharPartsOffset_Fallback == -1) continue;
+                auto& BrokenParts = BrokenSpec->Get<TArray<TSoftObjectPtr<UObject>>>(CharPartsOffset_Broken);
+                auto& FallbackParts = FallbackSpec->Get<TArray<TSoftObjectPtr<UObject>>>(CharPartsOffset_Fallback);
+                if (FallbackParts.Num() == 0) continue;
+                LOG_INFO(LogDev, "Fixing broken female HID {} by copying {} parts from {}", BrokenHID->GetPathName(), FallbackParts.Num(), FallbackHID->GetPathName());
+                BrokenParts.Free();
+                for (int p = 0; p < FallbackParts.Num(); ++p)
+                {
+                    BrokenParts.Add(FallbackParts.at(p));
+                }
+            }
+        };
+
+        // 1.72: only HID_001_F is broken
+        if (Fortnite_Version == 1.72)
+        {
+            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F");
+            // If HID_002_F also broken in this build, try HID_005_F
+            auto TestHID = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
+            if (TestHID)
+            {
+                // Verify fix by checking if still broken, fallback to HID_005_F
+                auto HID_005 = FindObject<UFortItemDefinition>(L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F");
+                if (HID_005) FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F");
+            }
+        }
+        else if (Fortnite_Version == 1.8)
+        {
+            // 1.8: HID_001-004_F are broken, use HID_005_F or later as source
+            const wchar_t* Fallback = L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F";
+            if (!FindObject<UFortItemDefinition>(Fallback)) Fallback = L"/Game/Athena/Heroes/HID_006_Athena_Commando_F.HID_006_Athena_Commando_F";
+            if (!FindObject<UFortItemDefinition>(Fallback)) Fallback = L"/Game/Athena/Heroes/HID_037_Athena_Commando_F.HID_037_Athena_Commando_F";
+            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", Fallback);
+            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", Fallback);
+            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F", Fallback);
+            FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_004_Athena_Commando_F.HID_004_Athena_Commando_F", Fallback);
+        }
+    }
+
     if (Fortnite_Version >= 17.30)
     {
         Hooking::MinHook::Hook(FindObject<UObject>("/Script/FortniteGame.Default__FortMissionLibrary"), FindObject<UFunction>(L"/Script/FortniteGame.FortMissionLibrary:TeleportPlayerPawn"), TeleportPlayerPawnHook,

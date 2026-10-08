@@ -13,6 +13,81 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 {
 	using UFortHeroSpecialization = UObject;
 
+	// Fix for 1.7.2/1.8 broken female HIDs where arms/legs are misaligned (wrong skeleton / missing parts).
+	// For 1.7.2 only HID_001_F is broken, for 1.8 HID_001-004_F are broken. Copy CharacterParts from a working female HID
+	// to avoid the misaligned skeleton while keeping female appearance (not cop-out to male).
+	{
+		auto HeroPath = HeroDefinition->GetPathName();
+		bool bIsBrokenFemale = false;
+		if (Fortnite_Version == 1.72)
+		{
+			bIsBrokenFemale = HeroPath.contains("HID_001_Athena_Commando_F");
+		}
+		else if (Fortnite_Version == 1.8)
+		{
+			bIsBrokenFemale = HeroPath.contains("HID_001_Athena_Commando_F") || HeroPath.contains("HID_002_Athena_Commando_F") || HeroPath.contains("HID_003_Athena_Commando_F") || HeroPath.contains("HID_004_Athena_Commando_F");
+		}
+		if (bIsBrokenFemale)
+		{
+			// Find a working female HID to copy parts from (avoid the broken ones)
+			static UFortItemDefinition* WorkingFemaleHID = nullptr;
+			if (!WorkingFemaleHID)
+			{
+				// Try known working female HIDs in order of preference
+				const wchar_t* Candidates[] = {
+					L"/Game/Athena/Heroes/HID_005_Athena_Commando_F.HID_005_Athena_Commando_F",
+					L"/Game/Athena/Heroes/HID_006_Athena_Commando_F.HID_006_Athena_Commando_F",
+					L"/Game/Athena/Heroes/HID_037_Athena_Commando_F.HID_037_Athena_Commando_F",
+					L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", // for 1.72 this is working
+					L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F",
+				};
+				for (auto CandPath : Candidates)
+				{
+					auto Cand = FindObject<UFortItemDefinition>(CandPath);
+					if (Cand)
+					{
+						auto CandPathStr = Cand->GetPathName();
+						bool bCandBroken = false;
+						if (Fortnite_Version == 1.72) bCandBroken = CandPathStr.contains("HID_001_Athena_Commando_F");
+						else if (Fortnite_Version == 1.8) bCandBroken = CandPathStr.contains("HID_001_Athena_Commando_F") || CandPathStr.contains("HID_002_Athena_Commando_F") || CandPathStr.contains("HID_003_Athena_Commando_F") || CandPathStr.contains("HID_004_Athena_Commando_F");
+						if (!bCandBroken)
+						{
+							WorkingFemaleHID = Cand;
+							LOG_INFO(LogDev, "Female fix: using working HID {} for broken {}", CandPathStr, HeroPath);
+							break;
+						}
+					}
+				}
+				// Fallback: find any Athena female not in broken list via scan
+				if (!WorkingFemaleHID)
+				{
+					auto AllHeroTypes = GetAllObjectsOfClass(FindObject<UClass>(L"/Script/FortniteGame.FortHeroType"));
+					for (int i = 0; i < AllHeroTypes.size(); ++i)
+					{
+						auto HT = (UFortItemDefinition*)AllHeroTypes.at(i);
+						auto HP = HT->GetPathName();
+						if (!HP.starts_with("/Game/Athena/Heroes/") || !HP.contains("_F")) continue;
+						bool bBroken = false;
+						if (Fortnite_Version == 1.72) bBroken = HP.contains("HID_001_Athena_Commando_F");
+						else if (Fortnite_Version == 1.8) bBroken = HP.contains("HID_001_Athena_Commando_F") || HP.contains("HID_002_Athena_Commando_F") || HP.contains("HID_003_Athena_Commando_F") || HP.contains("HID_004_Athena_Commando_F");
+						if (!bBroken)
+						{
+							WorkingFemaleHID = HT;
+							LOG_INFO(LogDev, "Female fix: scanned working HID {} for broken {}", HP, HeroPath);
+							break;
+						}
+					}
+				}
+			}
+			if (WorkingFemaleHID)
+			{
+				// Use the working HID's Specializations/CharacterParts instead of the broken one's
+				HeroDefinition = WorkingFemaleHID;
+				LOG_INFO(LogDev, "Female fix: remapped broken HID {} to working HID {}", HeroPath, WorkingFemaleHID->GetPathName());
+			}
+		}
+	}
+
 	static auto SpecializationsOffset = HeroDefinition->GetOffset("Specializations");
 	auto& Specializations = HeroDefinition->Get<TArray<TSoftObjectPtr<UFortHeroSpecialization>>>(SpecializationsOffset);
 
