@@ -96,7 +96,7 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 				static auto HeroDefOffset_BrokenForCopy = HeroDefinition ? HeroDefinition->GetOffset("Specializations") : -1;
 				UObject* WorkingHeroDef = HeroDefOffset_Working != -1 ? WorkingFemaleHID->Get<UObject*>(HeroDefOffset_Working) : nullptr;
 				// If working HID is already a HeroDefinition itself (STW case where HID is the definition), handle directly
-				if (!WorkingHeroDef && WorkingFemaleHID->GetClass() && std::wstring(WorkingFemaleHID->GetClass()->GetName()).contains(L"FortHero"))
+				if (!WorkingHeroDef && WorkingFemaleHID->GetOffset("Specializations") != -1)
 					WorkingHeroDef = WorkingFemaleHID;
 				if (WorkingHeroDef)
 				{

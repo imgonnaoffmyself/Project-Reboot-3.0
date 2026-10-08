@@ -467,7 +467,8 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 						{
 							auto HeldDef = HeldInstance->GetItemEntry()->GetItemDefinition();
 							bool bHeldIsAmmoRes = (AmmoClass && HeldDef->IsA(AmmoClass)) || (ResourceClass && HeldDef->IsA(ResourceClass));
-							if (!bHeldIsAmmoRes && HeldDef->CanBeDropped() && IsPrimaryQuickbar(HeldDef) == bIsIncomingPrimary)
+							auto HeldWorldDef = Cast<UFortWorldItemDefinition>(HeldDef);
+							if (!bHeldIsAmmoRes && HeldWorldDef && HeldWorldDef->CanBeDropped() && IsPrimaryQuickbar(HeldDef) == bIsIncomingPrimary)
 							{
 								ItemInstanceToSwap = HeldInstance;
 								ItemEntryToSwap = HeldInstance->GetItemEntry();
@@ -488,7 +489,8 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 							auto Def = Entry->GetItemDefinition();
 							if (!Def) continue;
 							if (IsPrimaryQuickbar(Def) != bIsIncomingPrimary) continue;
-							if (!Def->CanBeDropped()) continue;
+							auto WorldDef = Cast<UFortWorldItemDefinition>(Def);
+							if (!WorldDef || !WorldDef->CanBeDropped()) continue;
 							bool bIsAmmoRes2 = (AmmoClass && Def->IsA(AmmoClass)) || (ResourceClass && Def->IsA(ResourceClass));
 							if (bIsAmmoRes2) continue;
 							ItemInstanceToSwap = Inst;
