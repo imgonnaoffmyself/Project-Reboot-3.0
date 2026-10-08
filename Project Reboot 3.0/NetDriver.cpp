@@ -7,6 +7,7 @@
 #include "FortPlayerController.h"
 #include "FortPlayerPawn.h"
 #include "FortInventory.h"
+#include "FortWeaponItemDefinition.h"
 #include "GameplayStatics.h"
 #include "KismetMathLibrary.h"
 #include <random>
@@ -124,19 +125,6 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 					{
 						auto Def = InstanceToEquip->GetItemEntry()->GetItemDefinition();
 						Pawn->EquipWeaponDefinition((UFortWeaponItemDefinition*)Def, Guid);
-					}
-					// For <420, ensure QuickBars knows the selection for HUD
-					if (Engine_Version < 420)
-					{
-						static auto QuickBarsOffset = Controller->GetOffset("QuickBars", false);
-						if (QuickBarsOffset != -1)
-						{
-							auto QuickBars = Controller->Get<AFortQuickBars*>(QuickBarsOffset);
-							if (QuickBars)
-							{
-								// QuickBars will be updated via ServerExecute, but force HUD refresh by re-adding selection if needed
-							}
-						}
 					}
 				}
 			}
