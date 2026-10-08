@@ -110,10 +110,7 @@ static bool ApplyCID(AFortPlayerPawn* Pawn, UObject* CID, bool bUseServerChooseP
 	if (!HeroDefinition)
 		return false;
 
-	// Fixed: female rigging fails with ApplyCharacterCosmetics path on DS due to RetrieveCharacterParts returning null for 1.7.2 female parts.
-	// Use ServerChoosePart path for early versions which directly sets parts and works for both male/female.
-	bool bForceServerChoose = (Fortnite_Version == 1.72 || Fortnite_Version == 1.8) ? true : bUseServerChoosePart;
-	ApplyHID(Pawn, HeroDefinition, bForceServerChoose);
+	ApplyHID(Pawn, HeroDefinition, bUseServerChoosePart);
 
 	// static auto HeroTypeOffset = PlayerState->GetOffset("HeroType");
 	// PlayerState->Get(HeroTypeOffset) = HeroDefinition;
