@@ -36,6 +36,10 @@ std::pair<std::vector<UFortItem*>, std::vector<UFortItem*>> AFortInventory::AddI
 	auto MaxStackSize = ItemDefinition->GetMaxStackSize();
 
 	bool bAllowMultipleStacks = ItemDefinition->DoesAllowMultipleStacks();
+	// Fix: 1.7.2 consumables (heals) incorrectly have bAllowMultipleStacks=false, preventing second stack and leaving pickup impossible.
+	// Primary quickbar items (weapons/heals) should always allow multiple stacks when inventory has space; ammo/resource (secondary) must respect flag and overflow.
+	if (IsPrimaryQuickbar(ItemDefinition))
+		bAllowMultipleStacks = true;
 	int OverStack = 0;
 
 	std::vector<UFortItem*> NewItemInstances;

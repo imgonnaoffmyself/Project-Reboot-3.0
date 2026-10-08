@@ -376,6 +376,11 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 	auto PawnLoc = Pawn->GetActorLocation();
 	bool bIsIncomingPrimary = IsPrimaryQuickbar(PickupItemDefinition);
 
+	// Determine if incoming is ammo/resource (should never be limited by quickbar slots)
+	static auto AmmoClass = FindObject<UClass>(L"/Script/FortniteGame.FortAmmoItemDefinition");
+	static auto ResourceClass = FindObject<UClass>(L"/Script/FortniteGame.FortResourceItemDefinition");
+	bool bIsIncomingAmmoOrResource = (AmmoClass && PickupItemDefinition->IsA(AmmoClass)) || (ResourceClass && PickupItemDefinition->IsA(ResourceClass));
+
 	std::vector<std::pair<FFortItemEntry*, FFortItemEntry*>> PairsToMarkDirty; // vector of sets or something so no duplicates??
 	
 	if (bDebugPrintSwapping)
@@ -393,6 +398,7 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 		// Fixed: correctly count slots for the incoming item's quickbar type (both primary and secondary)
 		// Previously only counted primary slots when incoming was primary, causing non-weapon healing item swaps to fail
 		// and both items to end up on floor with one impossible to interact
+		// Ammo/Resource should never be considered inventory full (they are not quickbar-limited)
 		int SlotsFilledForIncomingType = 0;
 		bool bEverStacked = false;
 		bool bDoesStackExist = false;
@@ -405,17 +411,38 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 			if (!ItemInstance) continue;
 			auto CurrentItemEntry = ItemInstance->GetItemEntry();
 			if (!CurrentItemEntry) continue;
+			auto CurrentDef = CurrentItemEntry->GetItemDefinition();
+			if (!CurrentDef) continue;
 
-			bool bCurrentIsPrimary = IsPrimaryQuickbar(CurrentItemEntry->GetItemDefinition());
-			if (bCurrentIsPrimary == bIsIncomingPrimary)
+			// Ammo/Resource don't occupy quickbar slots; don't count them, but still allow stacking for same ammo type
+			bool bCurrentIsAmmoOrResource = (AmmoClass && CurrentDef->IsA(AmmoClass)) || (ResourceClass && CurrentDef->IsA(ResourceClass));
+			bool bCurrentIsPrimary = IsPrimaryQuickbar(CurrentDef);
+
+			// Only count non-ammo/resource items towards quickbar slots
+			if (!bCurrentIsAmmoOrResource)
 			{
-				int AmountOfSlotsTakenUp = 1; // TODO handle items that take multiple slots
-				SlotsFilledForIncomingType += AmountOfSlotsTakenUp;
+				if (bIsIncomingAmmoOrResource)
+				{
+					// Ammo/Resource incoming never counts as full
+					bIsInventoryFull = false;
+				}
+				else if (bCurrentIsPrimary == bIsIncomingPrimary)
+				{
+					int AmountOfSlotsTakenUp = 1; // TODO handle items that take multiple slots
+					SlotsFilledForIncomingType += AmountOfSlotsTakenUp;
+				}
+
+				if (!bIsIncomingAmmoOrResource)
+					bIsInventoryFull = SlotsFilledForIncomingType >= 5;
 			}
-
-			// LOG_INFO(LogDev, "[{}] SlotsFilledForIncomingType: {}", i, SlotsFilledForIncomingType);
-
-			bIsInventoryFull = SlotsFilledForIncomingType >= 5;
+			else
+			{
+				// Current is ammo/resource, doesn't count; ensure inventory not considered full for ammo incoming
+				if (bIsIncomingAmmoOrResource)
+					bIsInventoryFull = false;
+				else if (!bIsIncomingAmmoOrResource)
+					bIsInventoryFull = SlotsFilledForIncomingType >= 5;
+			}
 
 			if (bIsInventoryFull || (PlayerController->HasTryPickupSwap() ? PlayerController->ShouldTryPickupSwap() : false)) // probs shouldnt do in loop but alr
 			{
@@ -514,12 +541,24 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 			if (bDebugPrintSwapping)
 				LOG_INFO(LogDev, "Attempting to add to inventory.");
 
-			// Fixed: healing/consumable items were incorrectly blocking multiple stacks, causing overflow pickup that became impossible to interact.
-			// We always allow adding a new stack if inventory has space; DoesAllowMultipleStacks is unreliable for consumables in 1.7.2.
+			// Fixed: healing items (primary) were incorrectly blocked by DoesAllowMultipleStacks=false in 1.7.2, preventing second stack and leaving pickup impossible.
+			// Ammo/Resource (secondary, not quickbar) must respect DoesAllowMultipleStacks to avoid creating extra stacks; they overflow instead.
+			// We bypass the check only for primary quickbar items (weapons/consumables).
+			bool bBypassMultipleStacksCheck = bIsIncomingPrimary; // primary = weapons/heals, allow multiple stacks regardless of flag
+			bool bCanAddNewStack = bDoesStackExist ? (bBypassMultipleStacksCheck ? true : PickupItemDefinition->DoesAllowMultipleStacks()) : true;
+			if (bCanAddNewStack)
 			{
 				auto NewItemCount = cpyCount > PickupItemDefinition->GetMaxStackSize() ? PickupItemDefinition->GetMaxStackSize() : cpyCount;
 
 				auto NewAndModifiedInstances = WorldInventory->AddItem(PickupEntry, nullptr, true, NewItemCount);
+
+				// AddItem may return empty when it handled overflow internally (e.g., ammo full stack) - guard against OOB
+				if (NewAndModifiedInstances.first.empty())
+				{
+					// AddItem handled it as overflow spawn, treat as overflow for our loop
+					bForceOverflow = true;
+					continue;
+				}
 
 				auto NewVehicleInstance = NewAndModifiedInstances.first[0];
 
@@ -535,6 +574,10 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 				{
 					NewSwappedItem = NewVehicleInstance->GetItemEntry()->GetItemGuid();
 				}
+			}
+			else
+			{
+				bForceOverflow = true;
 			}
 		}
 	}
