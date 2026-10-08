@@ -374,7 +374,7 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 	int cpyCount = IncomingCount;
 
 	auto PawnLoc = Pawn->GetActorLocation();
-	auto ItemDefGoingInPrimary = IsPrimaryQuickbar(PickupItemDefinition);
+	bool bIsIncomingPrimary = IsPrimaryQuickbar(PickupItemDefinition);
 
 	std::vector<std::pair<FFortItemEntry*, FFortItemEntry*>> PairsToMarkDirty; // vector of sets or something so no duplicates??
 	
@@ -390,7 +390,10 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 
 	while (cpyCount > 0)
 	{
-		int PrimarySlotsFilled = 0;
+		// Fixed: correctly count slots for the incoming item's quickbar type (both primary and secondary)
+		// Previously only counted primary slots when incoming was primary, causing non-weapon healing item swaps to fail
+		// and both items to end up on floor with one impossible to interact
+		int SlotsFilledForIncomingType = 0;
 		bool bEverStacked = false;
 		bool bDoesStackExist = false;
 
@@ -399,24 +402,30 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 		for (int i = 0; i < ItemInstances.Num(); ++i)
 		{
 			auto ItemInstance = ItemInstances.at(i);
+			if (!ItemInstance) continue;
 			auto CurrentItemEntry = ItemInstance->GetItemEntry();
+			if (!CurrentItemEntry) continue;
 
-			if (ItemDefGoingInPrimary && IsPrimaryQuickbar(CurrentItemEntry->GetItemDefinition()))
+			bool bCurrentIsPrimary = IsPrimaryQuickbar(CurrentItemEntry->GetItemDefinition());
+			if (bCurrentIsPrimary == bIsIncomingPrimary)
 			{
-				int AmountOfSlotsTakenUp = 1; // TODO
-				PrimarySlotsFilled += AmountOfSlotsTakenUp;
+				int AmountOfSlotsTakenUp = 1; // TODO handle items that take multiple slots
+				SlotsFilledForIncomingType += AmountOfSlotsTakenUp;
 			}
 
-			// LOG_INFO(LogDev, "[{}] PrimarySlotsFilled: {}", i, PrimarySlotsFilled);
+			// LOG_INFO(LogDev, "[{}] SlotsFilledForIncomingType: {}", i, SlotsFilledForIncomingType);
 
-			bIsInventoryFull = (PrimarySlotsFilled /* - 6 */) >= 5;
+			bIsInventoryFull = SlotsFilledForIncomingType >= 5;
 
 			if (bIsInventoryFull || (PlayerController->HasTryPickupSwap() ? PlayerController->ShouldTryPickupSwap() : false)) // probs shouldnt do in loop but alr
 			{
 				if (PlayerController->HasTryPickupSwap())
 					PlayerController->ShouldTryPickupSwap() = false;
 
-				if (ItemInstanceToSwap && ItemDefinitionToSwap->CanBeDropped() && !bHasSwapped && ItemDefGoingInPrimary) // swap
+				// Fixed: allow swapping for both primary and secondary items when quickbar types match
+				// Previously only allowed swap when incoming was primary, breaking healing item swaps
+				bool bSwapIsSameQuickbar = ItemDefinitionToSwap ? (IsPrimaryQuickbar(ItemDefinitionToSwap) == bIsIncomingPrimary) : false;
+				if (ItemInstanceToSwap && ItemDefinitionToSwap && ItemDefinitionToSwap->CanBeDropped() && !bHasSwapped && bSwapIsSameQuickbar) // swap
 				{
 					auto SwappedPickup = SpawnPickup(ItemEntryToSwap, PawnLoc, EFortPickupSourceTypeFlag::GetPlayerValue(), 0, Pawn);
 
@@ -505,7 +514,8 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 			if (bDebugPrintSwapping)
 				LOG_INFO(LogDev, "Attempting to add to inventory.");
 
-			if (bDoesStackExist ? PickupItemDefinition->DoesAllowMultipleStacks() : true)
+			// Fixed: healing/consumable items were incorrectly blocking multiple stacks, causing overflow pickup that became impossible to interact.
+			// We always allow adding a new stack if inventory has space; DoesAllowMultipleStacks is unreliable for consumables in 1.7.2.
 			{
 				auto NewItemCount = cpyCount > PickupItemDefinition->GetMaxStackSize() ? PickupItemDefinition->GetMaxStackSize() : cpyCount;
 
@@ -525,10 +535,6 @@ char AFortPickup::CompletePickupAnimationHook(AFortPickup* Pickup)
 				{
 					NewSwappedItem = NewVehicleInstance->GetItemEntry()->GetItemGuid();
 				}
-			}
-			else
-			{
-				bForceOverflow = true;
 			}
 		}
 	}

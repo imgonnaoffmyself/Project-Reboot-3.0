@@ -17,6 +17,11 @@ bool ABuildingContainer::SpawnLoot(AFortPawn* Pawn)
 
 	FVector LocationToSpawnLoot = this->GetActorLocation() + this->GetActorForwardVector() * this->GetLootSpawnLocation_Athena().X + this->GetActorRightVector() * this->GetLootSpawnLocation_Athena().Y + this->GetActorUpVector() * this->GetLootSpawnLocation_Athena().Z;
 
+	// Fix: chests in specific areas were spawning loot stuck in floor. Add a small upward offset to match Epic's placement
+	// and ensure fallback for older versions where LootSpawnLocation_Athena was incorrectly returning zero.
+	LocationToSpawnLoot.Z += 15.f;
+	// Alternative using actor up vector to handle tilted containers: LocationToSpawnLoot += this->GetActorUpVector() * 15.f;
+
 	auto RedirectedLootTier = GameMode->RedirectLootTier(GetSearchLootTierGroup());
 
 	// LOG_INFO(LogInteraction, "RedirectedLootTier: {}", RedirectedLootTier.ToString());

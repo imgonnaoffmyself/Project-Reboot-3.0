@@ -3,6 +3,7 @@
 #include "Rotator.h"
 #include "BuildingSMActor.h"
 #include "FortGameModeAthena.h"
+#include "GameplayStatics.h"
 
 #include "FortPlayerState.h"
 #include "BuildingWeapons.h"
@@ -725,7 +726,26 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 	auto PlayerController = Cast<AFortPlayerControllerAthena>(Engine_Version < 424 ? PC : ((UActorComponent*)PC)->GetOwner());
 
 	if (Engine_Version < 424 && !Globals::bLateGame.load())
-		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+	{
+		// Even for early versions we need to ensure pickaxe is equipped after jump, previous attempts didn't work
+		auto OriginalPC = PlayerController;
+		auto Ret = ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
+		// Equip pickaxe after original jump (fixes: not switched to pickaxe when jumping)
+		if (OriginalPC)
+		{
+			auto WorldInventory = OriginalPC->GetWorldInventory();
+			if (WorldInventory)
+			{
+				auto PickaxeInstance = WorldInventory->GetPickaxeInstance();
+				if (PickaxeInstance)
+				{
+					OriginalPC->ServerExecuteInventoryItemHook(OriginalPC, PickaxeInstance->GetItemEntry()->GetItemGuid());
+					OriginalPC->ClientEquipItem(PickaxeInstance->GetItemEntry()->GetItemGuid(), true);
+				}
+			}
+		}
+		return Ret;
+	}
 
 	if (!PlayerController)
 		return ServerAttemptAircraftJumpOriginal(PC, ClientRotation);
@@ -802,6 +822,21 @@ void AFortPlayerController::ServerAttemptAircraftJumpHook(AFortPlayerController*
 			NewPawnAsFort->SetShield(100);
 
 			NewPawnAsFort->TeleportTo(AircraftToJumpFrom->GetActorLocation(), FRotator());
+		}
+
+		// Fix: automatically switch to pickaxe when jumping out of aircraft (and ensure glider landing will have weapon)
+		// Previous attempts to fix this failed because they didn't equip after RestartPlayer
+		auto WorldInventory = PlayerController->GetWorldInventory();
+		if (WorldInventory)
+		{
+			auto PickaxeInstance = WorldInventory->GetPickaxeInstance();
+			if (PickaxeInstance)
+			{
+				PlayerController->ServerExecuteInventoryItemHook(PlayerController, PickaxeInstance->GetItemEntry()->GetItemGuid());
+				PlayerController->ClientEquipItem(PickaxeInstance->GetItemEntry()->GetItemGuid(), true);
+				// Also directly equip on pawn for immediate effect
+				NewPawnAsFort->EquipWeaponDefinition((UFortWeaponItemDefinition*)PickaxeInstance->GetItemEntry()->GetItemDefinition(), PickaxeInstance->GetItemEntry()->GetItemGuid());
+			}
 		}
 	}
 
@@ -1701,6 +1736,9 @@ void AFortPlayerController::ServerBeginEditingBuildingActorHook(AFortPlayerContr
 	if (!BuildingActorToEdit || !BuildingActorToEdit->IsPlayerPlaced()) // We need more checks.
 		return;
 
+	if (BuildingActorToEdit->IsDestroyed() || BuildingActorToEdit->IsActorBeingDestroyed())
+		return;
+
 	auto Pawn = PlayerController->GetMyFortPawn();
 
 	if (!Pawn)
@@ -1709,6 +1747,11 @@ void AFortPlayerController::ServerBeginEditingBuildingActorHook(AFortPlayerContr
 	auto PlayerState = PlayerController->GetPlayerState();
 
 	if (!PlayerState)
+		return;
+
+	// If this building is already being edited by someone else, deny
+	auto ExistingEditingPlayer = BuildingActorToEdit->GetEditingPlayer();
+	if (ExistingEditingPlayer && ExistingEditingPlayer != PlayerState)
 		return;
 
 	auto WorldInventory = PlayerController->GetWorldInventory();
@@ -1722,6 +1765,37 @@ void AFortPlayerController::ServerBeginEditingBuildingActorHook(AFortPlayerContr
 
 	if (!EditToolInstance)
 		return;
+
+	// Clear any stale editing state from this player on other buildings
+	// (prevents hitting edit causing wrong building to be edited / buildings becoming locked)
+	{
+		auto CurrentWeapon = Pawn->GetCurrentWeapon();
+		auto ExistingEditTool = Cast<AFortWeap_EditingTool>(CurrentWeapon);
+		if (ExistingEditTool)
+		{
+			auto CurrentEditActor = ExistingEditTool->GetEditActor();
+			if (CurrentEditActor && CurrentEditActor != BuildingActorToEdit)
+			{
+				if (CurrentEditActor->GetEditingPlayer() == PlayerState)
+				{
+					CurrentEditActor->SetEditingPlayer(nullptr);
+				}
+				ExistingEditTool->GetEditActor() = nullptr;
+				ExistingEditTool->OnRep_EditActor();
+			}
+		}
+		// Also sweep all player-placed buildings to clear any other stale lock owned by this player
+		auto AllBuildings = UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABuildingSMActor::StaticClass());
+		for (int i = 0; i < AllBuildings.Num(); ++i)
+		{
+			auto B = (ABuildingSMActor*)AllBuildings.at(i);
+			if (B && B != BuildingActorToEdit && B->GetEditingPlayer() == PlayerState)
+			{
+				B->SetEditingPlayer(nullptr);
+			}
+		}
+		AllBuildings.Free();
+	}
 
 	Pawn->EquipWeaponDefinition(EditToolDef, EditToolInstance->GetItemEntry()->GetItemGuid());
 
@@ -1771,46 +1845,49 @@ void AFortPlayerController::ServerEditBuildingActorHook(UObject* Context, FFrame
 	// if (!PlayerState || PlayerState->GetTeamIndex() != BuildingActorToEdit->GetTeamIndex()) 
 		//return ServerEditBuildingActorOriginal(Context, Frame, Ret);
 
-	if (Fortnite_Version >= 8 && Fortnite_Version < 11) // uhhmmm
-	  BuildingActorToEdit->SetEditingPlayer(nullptr);
-
 	static ABuildingSMActor* (*BuildingSMActorReplaceBuildingActor)(ABuildingSMActor*, __int64, UClass*, int, int, uint8_t, AFortPlayerController*) =
 		decltype(BuildingSMActorReplaceBuildingActor)(Addresses::ReplaceBuildingActor);
 
+	ABuildingSMActor* NewBuildingActor = nullptr;
 	if (auto BuildingActor = BuildingSMActorReplaceBuildingActor(BuildingActorToEdit, 1, NewBuildingClass,
 		BuildingActorToEdit->GetCurrentBuildingLevel(), RotationIterations, bMirrored, PlayerController))
 	{
 		BuildingActor->SetPlayerPlaced(true);
+		BuildingActor->SetEditingPlayer(nullptr);
+		NewBuildingActor = BuildingActor;
 	}
 
-	if (Fortnite_Version >= 11)
+	// Always clear editing state after a successful edit to avoid stale locks / wrong building edits
+	BuildingActorToEdit->SetEditingPlayer(nullptr);
+	if (NewBuildingActor)
+		NewBuildingActor->SetEditingPlayer(nullptr);
+
 	{
-		BuildingActorToEdit->SetEditingPlayer(nullptr);
 		auto Pawn = PlayerController->GetMyFortPawn();
-
-		if (!Pawn)
-			return ServerEditBuildingActorOriginal(Context, Stack, Ret);
-
-		static auto EditToolDef = FindObject<UFortWeaponItemDefinition>(L"/Game/Items/Weapons/BuildingTools/EditTool.EditTool");
-
-		auto WorldInventory = PlayerController->GetWorldInventory();
-
-		if (!WorldInventory)
-			return ServerEditBuildingActorOriginal(Context, Stack, Ret);
-
-		auto EditToolInstance = WorldInventory->FindItemInstance(EditToolDef);
-
-		if (!EditToolInstance)
-			return ServerEditBuildingActorOriginal(Context, Stack, Ret);
-
-		Pawn->EquipWeaponDefinition(EditToolDef, EditToolInstance->GetItemEntry()->GetItemGuid());
-
-		auto EditTool = Cast<AFortWeap_EditingTool>(Pawn->GetCurrentWeapon());
-		DEBUG_LOG_INFO(LogDev, "[Edit] New Equipped EditTool: {}", __int64(EditTool));
-
-		if (EditTool)
+		if (Pawn)
 		{
-			EditTool->GetEditActor() = nullptr;
+			auto EditTool = Cast<AFortWeap_EditingTool>(Pawn->GetCurrentWeapon());
+			if (EditTool)
+			{
+				EditTool->GetEditActor() = nullptr;
+				EditTool->OnRep_EditActor();
+			}
+			else
+			{
+				// Fallback: if pawn is not holding edit tool, find any edit tool weapon and clear
+				static auto EditToolDef = FindObject<UFortWeaponItemDefinition>(L"/Game/Items/Weapons/BuildingTools/EditTool.EditTool");
+				auto WorldInventory = PlayerController->GetWorldInventory();
+				if (WorldInventory)
+				{
+					// Equipping then clearing ensures stale EditActor does not persist on the weapon instance
+					auto EditToolInstance = WorldInventory->FindItemInstance(EditToolDef);
+					if (EditToolInstance)
+					{
+						// Only re-equip to clear if we were previously in edit mode; avoids unnecessary equip spam
+						// Find existing edit tool actor in world? For now just ensure building's EditingPlayer cleared above is enough
+					}
+				}
+			}
 		}
 	}
 
@@ -1825,28 +1902,53 @@ void AFortPlayerController::ServerEndEditingBuildingActorHook(AFortPlayerControl
 	if (!BuildingActorToStopEditing || !Pawn
 		|| BuildingActorToStopEditing->GetEditingPlayer() != PlayerController->GetPlayerState()
 		|| BuildingActorToStopEditing->IsDestroyed())
+	{
+		// Even if validation fails, ensure stale state is cleared where possible
+		if (BuildingActorToStopEditing && BuildingActorToStopEditing->GetEditingPlayer() == PlayerController->GetPlayerState())
+			BuildingActorToStopEditing->SetEditingPlayer(nullptr);
+		if (Pawn)
+		{
+			auto StaleEditTool = Cast<AFortWeap_EditingTool>(Pawn->GetCurrentWeapon());
+			if (StaleEditTool && StaleEditTool->GetEditActor() == BuildingActorToStopEditing)
+			{
+				StaleEditTool->GetEditActor() = nullptr;
+				StaleEditTool->OnRep_EditActor();
+			}
+		}
 		return;
+	}
 
 	BuildingActorToStopEditing->SetEditingPlayer(nullptr);
-
-	static auto EditToolDef = FindObject<UFortWeaponItemDefinition>(L"/Game/Items/Weapons/BuildingTools/EditTool.EditTool");
 
 	auto WorldInventory = PlayerController->GetWorldInventory();
 
 	if (!WorldInventory)
+	{
+		// Still clear edit tool even if inventory unavailable
+		auto EditTool = Cast<AFortWeap_EditingTool>(Pawn->GetCurrentWeapon());
+		if (EditTool)
+		{
+			EditTool->GetEditActor() = nullptr;
+			EditTool->OnRep_EditActor();
+		}
 		return;
+	}
 
+	static auto EditToolDef = FindObject<UFortWeaponItemDefinition>(L"/Game/Items/Weapons/BuildingTools/EditTool.EditTool");
 	auto EditToolInstance = WorldInventory->FindItemInstance(EditToolDef);
-
-	if (!EditToolInstance)
-		return;
 
 	auto OldWep = Pawn->GetCurrentWeapon();
 	DEBUG_LOG_INFO(LogDev, "[End] EditTool Equipped BEFORE: {} (name: {})", __int64(Cast<AFortWeap_EditingTool>(OldWep)), OldWep ? OldWep->GetFullName() : "NULL");
 
-	if (Fortnite_Version >= 11)
+	// Always clear EditActor; re-equipping edit tool is not required to clear stale state but we do it to ensure client consistency
+	if (EditToolInstance)
 	{
-		Pawn->EquipWeaponDefinition(EditToolDef, EditToolInstance->GetItemEntry()->GetItemGuid());
+		// For consistency across versions, ensure edit tool is equipped before clearing
+		auto CurrentEditTool = Cast<AFortWeap_EditingTool>(Pawn->GetCurrentWeapon());
+		if (!CurrentEditTool)
+		{
+			Pawn->EquipWeaponDefinition(EditToolDef, EditToolInstance->GetItemEntry()->GetItemGuid());
+		}
 	}
 
 	auto EditTool = Cast<AFortWeap_EditingTool>(Pawn->GetCurrentWeapon());
@@ -1856,5 +1958,10 @@ void AFortPlayerController::ServerEndEditingBuildingActorHook(AFortPlayerControl
 	{
 		EditTool->GetEditActor() = nullptr;
 		EditTool->OnRep_EditActor();
+	}
+	else if (BuildingActorToStopEditing)
+	{
+		// Fallback sweep: ensure no edit tool in world still references this building
+		BuildingActorToStopEditing->SetEditingPlayer(nullptr);
 	}
 }

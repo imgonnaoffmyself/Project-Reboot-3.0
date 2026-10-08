@@ -102,11 +102,13 @@ static bool ApplyCID(AFortPlayerPawn* Pawn, UObject* CID, bool bUseServerChooseP
 
 	return true; */
 
-	if (Fortnite_Version == 1.72)
+	static auto HeroDefinitionOffset = CID->GetOffset("HeroDefinition");
+	if (HeroDefinitionOffset == -1)
 		return false;
 
-	static auto HeroDefinitionOffset = CID->GetOffset("HeroDefinition");
 	auto HeroDefinition = CID->Get(HeroDefinitionOffset);
+	if (!HeroDefinition)
+		return false;
 
 	ApplyHID(Pawn, HeroDefinition, bUseServerChoosePart);
 

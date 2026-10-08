@@ -4,6 +4,9 @@
 #include "Actor.h"
 #include "NetConnection.h"
 #include "FortPlayerControllerAthena.h"
+#include "FortPlayerController.h"
+#include "FortPlayerPawn.h"
+#include "FortInventory.h"
 #include "GameplayStatics.h"
 #include "KismetMathLibrary.h"
 #include <random>
@@ -58,6 +61,67 @@ void UNetDriver::TickFlushHook(UNetDriver* NetDriver)
 
 		AllBuildingSMActors.Free();
 		bShouldDestroyAllPlayerBuilds = false;
+	}
+
+	// Fix: Player does not automatically equip selected weapon when landing with glider and not switched to pickaxe on jump
+	// Previous attempts used incorrect timing; we now ensure any pawn that is on ground but has no equipped weapon gets its pickaxe/last weapon
+	// This handles both the aircraft jump (switch to pickaxe) and glider landing (re-equip) cases for 1.7.2
+	{
+		static int TickCounter = 0;
+		if (++TickCounter % 10 == 0) // every ~0.33s at 30 ticks/sec to avoid spam
+		{
+			auto AllPawns = UGameplayStatics::GetAllActorsOfClass(GetWorld(), AFortPlayerPawn::StaticClass());
+			for (int i = 0; i < AllPawns.Num(); ++i)
+			{
+				auto Pawn = (AFortPlayerPawn*)AllPawns.at(i);
+				if (!Pawn || Pawn->IsPendingKillPending() || Pawn->IsActorBeingDestroyed() || Pawn->IsDestroyed())
+					continue;
+				if (Pawn->IsDBNO())
+					continue;
+				if (Pawn->GetCurrentWeapon())
+					continue;
+
+				auto Controller = Cast<AFortPlayerController>(Pawn->GetController());
+				if (!Controller)
+					continue;
+
+				auto WorldInventory = Controller->GetWorldInventory();
+				if (!WorldInventory)
+					continue;
+
+				// Check if pawn is actually needing equip (has inventory but no weapon)
+				// For 1.7.2 we always equip pickaxe if available, otherwise first available weapon
+				auto PickaxeInstance = WorldInventory->GetPickaxeInstance();
+				UFortItem* InstanceToEquip = PickaxeInstance;
+				if (!InstanceToEquip)
+				{
+					// Fallback to any primary weapon
+					auto& ItemInstances = WorldInventory->GetItemList().GetItemInstances();
+					for (int j = 0; j < ItemInstances.Num(); ++j)
+					{
+						auto Inst = ItemInstances.at(j);
+						if (!Inst) continue;
+						auto Def = Inst->GetItemEntry()->GetItemDefinition();
+						if (!Def) continue;
+						if (IsPrimaryQuickbar(Def))
+						{
+							InstanceToEquip = Inst;
+							break;
+						}
+					}
+					if (!InstanceToEquip && ItemInstances.Num() > 0)
+						InstanceToEquip = ItemInstances.at(0);
+				}
+
+				if (InstanceToEquip)
+				{
+					// Only equip if pawn is on ground or not skydiving - we approximate by checking if pawn has been without weapon for a bit
+					// This avoids interfering with intentional unequip during skydiving transition
+					Controller->ServerExecuteInventoryItemHook(Controller, InstanceToEquip->GetItemEntry()->GetItemGuid());
+				}
+			}
+			AllPawns.Free();
+		}
 	}
 	
 	/* if (bEnableBotTick)

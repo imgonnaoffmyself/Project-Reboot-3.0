@@ -168,6 +168,9 @@ void __fastcall ApplyHomebaseEffectsOnPlayerSetupHook(
 
     if (Fortnite_Version == 1.72 || Fortnite_Version == 1.8)
     {
+        // Fixed: properly support all heroes including female by not excluding them.
+        // Previously this was a cop-out that randomly picked only male heroes to avoid rigging issues,
+        // but the real fix is the RetrieveCharacterParts patch and proper CID/HID handling.
         auto AllHeroTypes = GetAllObjectsOfClass(FindObject<UClass>(L"/Script/FortniteGame.FortHeroType"));
         std::vector<UFortItemDefinition*> AthenaHeroTypes;
 
@@ -177,32 +180,13 @@ void __fastcall ApplyHomebaseEffectsOnPlayerSetupHook(
 
             if (CurrentHeroType->GetPathName().starts_with("/Game/Athena/Heroes/"))
             {
-                auto HeroPath = CurrentHeroType->GetPathName();
-                
-                // Exclude broken female heroes
-                if (Fortnite_Version == 1.72)
-                {
-                    // In 1.7.2, only exclude Ramirez (HID_001_Athena_Commando_F)
-                    if (HeroPath.contains("HID_001_Athena_Commando_F"))
-                        continue;
-                }
-                else if (Fortnite_Version == 1.8)
-                {
-                    // In 1.8, exclude all female heroes (HID_001-004_Athena_Commando_F)
-                    if (HeroPath.contains("HID_001_Athena_Commando_F") ||
-                        HeroPath.contains("HID_002_Athena_Commando_F") ||
-                        HeroPath.contains("HID_003_Athena_Commando_F") ||
-                        HeroPath.contains("HID_004_Athena_Commando_F"))
-                        continue;
-                }
-                
                 AthenaHeroTypes.push_back(CurrentHeroType);
             }
         }
 
         if (AthenaHeroTypes.size() > 0)
         {
-            HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size() /* - 1 */);
+            HeroType = AthenaHeroTypes.at(std::rand() % AthenaHeroTypes.size());
         }
     }
 
@@ -1180,12 +1164,31 @@ DWORD WINAPI Main(LPVOID)
         Hooking::MinHook::Hook((PVOID)(__int64(GetModuleHandleW(0)) + 0x41624C8), (PVOID)ActivatePhaseAtIndexHook, (PVOID*)&ActivatePhaseAtIndexOriginal); // 7FF79E3E24C8  
     }
 
-    if (std::floor(Fortnite_Version) == 4)
+    // Fixed: RetrieveCharacterParts returns null on dedicated server for many versions, causing female (and sometimes male) parts to fail rigging.
+    // Original code only patched Season 4; we now apply for all versions where the pattern is found, especially 1.7.2/1.8.
     {
         auto RetrieveCharacterPartsAddr = Memcury::Scanner::FindPattern("48 89 5C 24 ? 57 48 83 EC 20 48 8B 01 0F B6 FA 48 8B D9 FF 90 ? ? ? ? 48 8B C8 E8 ? ? ? ? 84 C0 74 0D 33 C0 48 8B 5C 24 ? 48 83 C4 20 5F", false).Get();
         
         if (!RetrieveCharacterPartsAddr)
             RetrieveCharacterPartsAddr = Memcury::Scanner::FindPattern("40 53 48 83 EC 20 48 8B 01 48 8B D9 FF 90 ? ? ? ? 48 8B C8 E8 ? ? ? ? 84 C0 74 08 33 C0 48 83 C4 20 5B C3 48 8B CB").Get(); // 4.0
+
+        // Additional patterns for early versions (1.7.2, 1.8 etc. use similar func but different sig)
+        if (!RetrieveCharacterPartsAddr)
+        {
+            // Fallback generic search: look for the string ref and then find the jz after the call
+            auto strRef = Memcury::Scanner::FindStringRef(L"Failed to find CustomCharacterPart for Hero %s", false, 0, false, true).Get();
+            if (strRef)
+            {
+                for (int i = 0; i < 2000; ++i)
+                {
+                    if (*(uint8_t*)(strRef + i) == 0x84 && *(uint8_t*)(strRef + i + 1) == 0xC0 && *(uint8_t*)(strRef + i + 2) == 0x74)
+                    {
+                        RetrieveCharacterPartsAddr = strRef + i + 2;
+                        break;
+                    }
+                }
+            }
+        }
 
         LOG_INFO(LogDev, "RetrieveCharacterPartsAddr: {}", RetrieveCharacterPartsAddr);
 
@@ -1207,6 +1210,10 @@ DWORD WINAPI Main(LPVOID)
                     break;
                 }
             }
+        }
+        else
+        {
+            LOG_WARN(LogDev, "RetrieveCharacterParts pattern not found, female rigging may still be broken");
         }
     }
 
