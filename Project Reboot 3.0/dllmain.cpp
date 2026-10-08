@@ -1267,6 +1267,59 @@ DWORD WINAPI Main(LPVOID)
             }
         };
 
+        // Direct CustomCharacterPart fallback for when HID fallback fails (1.8 has no working Athena female, 1.72 rare case) — directly use correctly rigged F_Med parts
+        auto FixBrokenFemaleDirect = [](const wchar_t* BrokenPath) {
+            auto BrokenHID = FindObject<UFortItemDefinition>(BrokenPath);
+            if (!BrokenHID) return;
+            UObject* BrokenHeroDef = nullptr;
+            auto HeroDefOffset_BrokenDirect = BrokenHID->GetOffset("HeroDefinition");
+            if (HeroDefOffset_BrokenDirect != -1) BrokenHeroDef = BrokenHID->Get<UObject*>(HeroDefOffset_BrokenDirect);
+            if (!BrokenHeroDef && BrokenHID->GetOffset("Specializations") != -1) BrokenHeroDef = BrokenHID;
+            if (!BrokenHeroDef) return;
+            auto SpecOffset_BrokenDirect = BrokenHeroDef->GetOffset("Specializations");
+            if (SpecOffset_BrokenDirect == -1) return;
+            auto& BrokenSpecsDirect = BrokenHeroDef->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_BrokenDirect);
+            if (BrokenSpecsDirect.Num() == 0) return;
+            static auto CustomCharacterPartClassDirect = FindObject<UClass>(L"/Script/FortniteGame.CustomCharacterPart");
+            const wchar_t* BodyCandidatesDirect[] = {
+                L"/Game/Characters/CharacterParts/Female/Medium/Bodies/F_Med_Soldier_01.F_Med_Soldier_01",
+                L"/Game/Characters/Player/Female/Medium/Bodies/F_Med_Soldier_01.F_Med_Soldier_01",
+                L"/Game/Characters/CharacterParts/Female/Medium/Bodies/F_Med_Soldier_02.F_Med_Soldier_02",
+            };
+            const wchar_t* HeadCandidatesDirect[] = {
+                L"/Game/Characters/CharacterParts/Female/Medium/Heads/F_Med_Head1.F_Med_Head1",
+                L"/Game/Characters/Player/Female/Medium/Heads/F_Med_Head1.F_Med_Head1",
+            };
+            UObject* WorkingBodyPartDirect = nullptr;
+            UObject* WorkingHeadPartDirect = nullptr;
+            for (auto p : BodyCandidatesDirect) { WorkingBodyPartDirect = FindObject<UObject>(p); if (WorkingBodyPartDirect) break; }
+            for (auto p : HeadCandidatesDirect) { WorkingHeadPartDirect = FindObject<UObject>(p); if (WorkingHeadPartDirect) break; }
+            if (!WorkingBodyPartDirect && !WorkingHeadPartDirect) return;
+            LOG_INFO(LogDev, "Fixing broken female HID {} via direct F_Med parts (HID fallback failed) body {} head {}", BrokenHID->GetPathName(), WorkingBodyPartDirect ? WorkingBodyPartDirect->GetPathName() : L"null", WorkingHeadPartDirect ? WorkingHeadPartDirect->GetPathName() : L"null");
+            for (int s = 0; s < BrokenSpecsDirect.Num(); ++s)
+            {
+                auto BrokenSpecDirect = BrokenSpecsDirect.at(s).Get(FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization"), true);
+                if (!BrokenSpecDirect) continue;
+                auto CharPartsOffset_Direct = BrokenSpecDirect->GetOffset("CharacterParts");
+                if (CharPartsOffset_Direct == -1) continue;
+                auto& BrokenPartsDirect = BrokenSpecDirect->Get<TArray<TSoftObjectPtr<UObject>>>(CharPartsOffset_Direct);
+                for (int pIdx = 0; pIdx < BrokenPartsDirect.Num(); ++pIdx)
+                {
+                    auto PartSoft = BrokenPartsDirect.at(pIdx).Get(CustomCharacterPartClassDirect, true);
+                    if (!PartSoft) continue;
+                    auto PartPath = PartSoft->GetPathName();
+                    if (WorkingBodyPartDirect && PartPath.contains(L"/Bodies/") && PartPath.contains(L"F_Med"))
+                    {
+                        BrokenPartsDirect.at(pIdx) = TSoftObjectPtr<UObject>(WorkingBodyPartDirect);
+                    }
+                    else if (WorkingHeadPartDirect && PartPath.contains(L"/Heads/") && PartPath.contains(L"F_Med"))
+                    {
+                        BrokenPartsDirect.at(pIdx) = TSoftObjectPtr<UObject>(WorkingHeadPartDirect);
+                    }
+                }
+            }
+        };
+
         // 1.72: only HID_001_F is broken — use HID_002_F (exists and is working in 1.72)
         if (Fortnite_Version == 1.72)
         {
@@ -1285,6 +1338,8 @@ DWORD WINAPI Main(LPVOID)
                     auto STW = FindObject<UFortItemDefinition>(FB);
                     if (STW) { FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F", FB); break; }
                 }
+                // Safety net: direct F_Med parts if HID still not found or still misaligned
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
             }
         }
         else if (Fortnite_Version == 1.8)
@@ -1329,10 +1384,19 @@ DWORD WINAPI Main(LPVOID)
                 FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F", Fallback);
                 FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F", Fallback);
                 FixBrokenFemaleHID(L"/Game/Athena/Heroes/HID_004_Athena_Commando_F.HID_004_Athena_Commando_F", Fallback);
+                // Also apply direct F_Med fix as safety net in case HID copy still leaves misaligned skeleton
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_004_Athena_Commando_F.HID_004_Athena_Commando_F");
             }
             else
             {
-                LOG_WARN(LogDev, "Female fix: no valid fallback found for 1.8 broken HIDs (HID_005_F does not exist, GrenadeGun not found)");
+                LOG_WARN(LogDev, "Female fix: no HID fallback for 1.8 (HID_005_F does not exist, GrenadeGun not found) — using direct F_Med parts");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_001_Athena_Commando_F.HID_001_Athena_Commando_F");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_002_Athena_Commando_F.HID_002_Athena_Commando_F");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_003_Athena_Commando_F.HID_003_Athena_Commando_F");
+                FixBrokenFemaleDirect(L"/Game/Athena/Heroes/HID_004_Athena_Commando_F.HID_004_Athena_Commando_F");
             }
         }
     }

@@ -30,7 +30,7 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 		if (bIsBrokenFemale)
 		{
 			// Find a working female HID to copy parts from (avoid the broken ones)
-			// HID_005_Athena_Commando_F does NOT exist (HID_005_M is male), so use STW Ramirez as fallback which is the game's default skeleton and is known to be correctly rigged.
+			// HID_005_Athena_Commando_F does NOT exist (HID_005_M is male). Previous STW GrenadeGun fallback path may not exist in 1.8 either, so also try direct CustomCharacterPart fix.
 			static UFortItemDefinition* WorkingFemaleHID = nullptr;
 			if (!WorkingFemaleHID)
 			{
@@ -86,6 +86,65 @@ static void ApplyHID(AFortPlayerPawn* Pawn, UObject* HeroDefinition, bool bUseSe
 						if (STW1) WorkingFemaleHID = STW1;
 						else if (STW2) WorkingFemaleHID = STW2;
 						if (WorkingFemaleHID) LOG_INFO(LogDev, "Female fix: using STW fallback {} for broken {}", WorkingFemaleHID->GetPathName(), HeroPath);
+					}
+					// Direct CustomCharacterPart fallback — when all Athena female HIDs are broken (1.8) and STW HID also not found, directly use known working body/head parts
+					// This bypasses HID entirely and fixes the misaligned skeleton by using correctly rigged F_Med parts that exist in all versions
+					if (!WorkingFemaleHID)
+					{
+						static auto CustomCharacterPartClass = FindObject<UClass>(L"/Script/FortniteGame.CustomCharacterPart");
+						const wchar_t* BodyCandidates[] = {
+							L"/Game/Characters/CharacterParts/Female/Medium/Bodies/F_Med_Soldier_01.F_Med_Soldier_01",
+							L"/Game/Characters/Player/Female/Medium/Bodies/F_Med_Soldier_01.F_Med_Soldier_01",
+							L"/Game/Characters/CharacterParts/Female/Medium/Bodies/F_Med_Soldier_02.F_Med_Soldier_02",
+						};
+						const wchar_t* HeadCandidates[] = {
+							L"/Game/Characters/CharacterParts/Female/Medium/Heads/F_Med_Head1.F_Med_Head1",
+							L"/Game/Characters/Player/Female/Medium/Heads/F_Med_Head1.F_Med_Head1",
+						};
+						UObject* WorkingBodyPart = nullptr;
+						UObject* WorkingHeadPart = nullptr;
+						for (auto p : BodyCandidates) { WorkingBodyPart = FindObject<UObject>(p); if (WorkingBodyPart) break; }
+						for (auto p : HeadCandidates) { WorkingHeadPart = FindObject<UObject>(p); if (WorkingHeadPart) break; }
+						if (WorkingBodyPart || WorkingHeadPart)
+						{
+							LOG_INFO(LogDev, "Female fix: direct CustomCharacterPart fix for broken {} using body {} head {} (HID fallback failed)", HeroPath, WorkingBodyPart ? WorkingBodyPart->GetPathName() : L"null", WorkingHeadPart ? WorkingHeadPart->GetPathName() : L"null");
+							// Directly patch the broken HeroDefinition's Specializations — this fixes misaligned skeleton even when all Athena HIDs are broken (1.8)
+							static auto SpecOffset_Direct = HeroDefinition->GetOffset("Specializations");
+							if (SpecOffset_Direct != -1)
+							{
+								auto& BrokenSpecsDirect = HeroDefinition->Get<TArray<TSoftObjectPtr<UObject>>>(SpecOffset_Direct);
+								for (int s = 0; s < BrokenSpecsDirect.Num(); ++s)
+								{
+									auto BrokenSpecDirect = BrokenSpecsDirect.at(s).Get(FindObject<UClass>(L"/Script/FortniteGame.FortHeroSpecialization"), true);
+									if (!BrokenSpecDirect) continue;
+									static auto CharPartsOffset_Direct = BrokenSpecDirect->GetOffset("CharacterParts");
+									if (CharPartsOffset_Direct == -1) continue;
+									auto& BrokenPartsDirect = BrokenSpecDirect->Get<TArray<TSoftObjectPtr<UObject>>>(CharPartsOffset_Direct);
+									for (int pIdx = 0; pIdx < BrokenPartsDirect.Num(); ++pIdx)
+									{
+										auto PartSoft = BrokenPartsDirect.at(pIdx).Get(CustomCharacterPartClass, true);
+										if (!PartSoft) continue;
+										auto PartPath = PartSoft->GetPathName();
+										// Replace Body (contains /Bodies/ and F_Med) with working body, Head with working head — fixes arms through stomach
+										if (WorkingBodyPart && PartPath.contains(L"/Bodies/") && PartPath.contains(L"F_Med"))
+										{
+											BrokenPartsDirect.at(pIdx) = TSoftObjectPtr<UObject>(WorkingBodyPart);
+											LOG_INFO(LogDev, "Female fix: replaced Body part {} with {}", PartPath, WorkingBodyPart->GetPathName());
+										}
+										else if (WorkingHeadPart && PartPath.contains(L"/Heads/") && PartPath.contains(L"F_Med"))
+										{
+											BrokenPartsDirect.at(pIdx) = TSoftObjectPtr<UObject>(WorkingHeadPart);
+											LOG_INFO(LogDev, "Female fix: replaced Head part {} with {}", PartPath, WorkingHeadPart->GetPathName());
+										}
+									}
+								}
+							}
+							// Direct fix applied — patched parts will be used in normal flow below, no HID copy needed
+						}
+						else
+						{
+							LOG_WARN(LogDev, "Female fix: direct part fallback failed for broken {} — no working F_Med parts found (tried BodyCandidates/head)", HeroPath);
+						}
 					}
 				}
 			}
